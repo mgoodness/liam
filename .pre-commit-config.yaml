@@ -1,0 +1,17 @@
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        description: Ensure Go source is gofmt-formatted
+        entry: bash -c 'diff=$(gofmt -l "$@"); if [ -n "$diff" ]; then echo "$diff"; exit 1; fi' --
+        language: system
+        types: [go]
+
+      - id: go-vet
+        name: go vet
+        description: Run go vet across the module
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
