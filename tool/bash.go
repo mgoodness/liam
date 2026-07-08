@@ -11,9 +11,8 @@ import (
 )
 
 // DefaultTimeout is how long a bash command may run before it's killed,
-// unless a call supplies its own Timeout. A var (not a const) so it stays
-// overridable for testing.
-var DefaultTimeout = 30 * time.Second
+// unless a call supplies its own Timeout.
+const DefaultTimeout = 30 * time.Second
 
 var bashDefinition = Definition{
 	Name:        "bash",
@@ -36,6 +35,13 @@ type bashArgs struct {
 // Bash runs args.Command via /bin/sh -c, killing it if it exceeds its
 // timeout (args.Timeout seconds if set, otherwise DefaultTimeout).
 func Bash(ctx context.Context, args json.RawMessage) (string, error) {
+	return runBash(ctx, args, DefaultTimeout)
+}
+
+// runBash is Bash's implementation, taking the default timeout as a
+// parameter so tests can exercise default-timeout behavior with a short
+// duration instead of waiting out the real DefaultTimeout.
+func runBash(ctx context.Context, args json.RawMessage, defaultTimeout time.Duration) (string, error) {
 	var a bashArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("parsing bash args: %w", err)
@@ -44,7 +50,7 @@ func Bash(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", errors.New("bash: command is required")
 	}
 
-	timeout := DefaultTimeout
+	timeout := defaultTimeout
 	if a.Timeout > 0 {
 		timeout = time.Duration(a.Timeout) * time.Second
 	}

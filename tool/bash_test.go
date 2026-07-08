@@ -40,14 +40,15 @@ func TestBash_CapturesOutputAndExitCode(t *testing.T) {
 }
 
 func TestBash_DefaultTimeoutKillsCommand(t *testing.T) {
-	old := DefaultTimeout
-	DefaultTimeout = 100 * time.Millisecond
-	defer func() { DefaultTimeout = old }()
-
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
 
-	_, err := callBash(t, "sleep 2 && touch "+marker, 0)
+	args, err := json.Marshal(map[string]any{"command": "sleep 2 && touch " + marker})
+	if err != nil {
+		t.Fatalf("marshaling args: %v", err)
+	}
+
+	_, err = runBash(context.Background(), args, 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}

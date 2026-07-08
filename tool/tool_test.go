@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestCall_UnknownTool(t *testing.T) {
@@ -52,5 +53,23 @@ func TestTruncate(t *testing.T) {
 	}
 	if !strings.Contains(got, "[truncated: 100 bytes omitted]") {
 		t.Errorf("expected truncation marker, got tail %q", got[len(got)-40:])
+	}
+}
+
+func TestTruncate_DoesNotSplitMultibyteRune(t *testing.T) {
+	// Place a 4-byte emoji straddling the byte cap so a naive s[:MaxResultBytes]
+	// cut would slice it in half and produce invalid UTF-8.
+	prefix := strings.Repeat("a", MaxResultBytes-1)
+	s := prefix + "🎉" + "trailing"
+
+	got := truncate(s)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated output is not valid UTF-8: %q", got)
+	}
+	if strings.Contains(got, "🎉") {
+		t.Error("expected the straddling rune to be excluded, not partially included")
+	}
+	if !strings.Contains(got, "bytes omitted]") {
+		t.Errorf("expected truncation marker, got %q", got)
 	}
 }

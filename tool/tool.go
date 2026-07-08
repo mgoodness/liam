@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 )
 
 // MaxResultBytes caps how much text a single tool result may return.
@@ -77,6 +78,15 @@ func truncate(s string) string {
 	if len(s) <= MaxResultBytes {
 		return s
 	}
-	omitted := len(s) - MaxResultBytes
-	return fmt.Sprintf("%s\n[truncated: %d bytes omitted]", s[:MaxResultBytes], omitted)
+
+	// Back up from the byte cap to a rune boundary so we never split a
+	// multibyte UTF-8 character in two, which would hand the model an
+	// invalid string.
+	cut := MaxResultBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	omitted := len(s) - cut
+	return fmt.Sprintf("%s\n[truncated: %d bytes omitted]", s[:cut], omitted)
 }
