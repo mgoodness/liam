@@ -79,13 +79,12 @@ func Call(ctx context.Context, name string, args json.RawMessage) (string, error
 	if err != nil {
 		return "", err
 	}
-	return Truncate(result), nil
+	return truncate(result), nil
 }
 
-// Truncate caps s to MaxResultBytes, appending a marker noting how much
-// was omitted. Exported so callers invoking a Tool's Handler directly
-// (bypassing Call) can still apply the same cap.
-func Truncate(s string) string {
+// truncate caps s to MaxResultBytes, appending a marker noting how much
+// was omitted.
+func truncate(s string) string {
 	if len(s) <= MaxResultBytes {
 		return s
 	}

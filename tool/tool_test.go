@@ -42,12 +42,12 @@ func TestCall_Dispatches(t *testing.T) {
 
 func TestTruncate(t *testing.T) {
 	small := "hello"
-	if got := Truncate(small); got != small {
+	if got := truncate(small); got != small {
 		t.Errorf("small input should be unchanged, got %q", got)
 	}
 
 	big := strings.Repeat("a", MaxResultBytes+100)
-	got := Truncate(big)
+	got := truncate(big)
 	if !strings.HasPrefix(got, strings.Repeat("a", MaxResultBytes)) {
 		t.Error("truncated output should preserve the first MaxResultBytes bytes")
 	}
@@ -62,7 +62,7 @@ func TestTruncate_DoesNotSplitMultibyteRune(t *testing.T) {
 	prefix := strings.Repeat("a", MaxResultBytes-1)
 	s := prefix + "🎉" + "trailing"
 
-	got := Truncate(s)
+	got := truncate(s)
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncated output is not valid UTF-8: %q", got)
 	}
