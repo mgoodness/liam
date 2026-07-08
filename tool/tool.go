@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 )
@@ -58,6 +59,13 @@ var Tools = map[string]Tool{
 	"bash":  {Definition: bashDefinition, Handler: Bash},
 }
 
+// ErrUnknownTool is wrapped into the error Call returns when name isn't in
+// Tools, so callers can tell this apart from a Handler's own failure via
+// errors.Is: an unknown tool name signals a bug in the caller (requesting
+// a tool outside the definitions it was given), not a tool-level failure
+// meant to be relayed back to the model.
+var ErrUnknownTool = errors.New("unknown tool")
+
 // Call looks up name in Tools and invokes its Handler with args, truncating
 // the result to MaxResultBytes. An unknown tool name is a Go error rather
 // than a tool result, since the Provider should only ever request tools
@@ -65,7 +73,7 @@ var Tools = map[string]Tool{
 func Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	t, ok := Tools[name]
 	if !ok {
-		return "", fmt.Errorf("unknown tool %q", name)
+		return "", fmt.Errorf("%w: %q", ErrUnknownTool, name)
 	}
 	result, err := t.Handler(ctx, args)
 	if err != nil {
@@ -74,6 +82,8 @@ func Call(ctx context.Context, name string, args json.RawMessage) (string, error
 	return truncate(result), nil
 }
 
+// truncate caps s to MaxResultBytes, appending a marker noting how much
+// was omitted.
 func truncate(s string) string {
 	if len(s) <= MaxResultBytes {
 		return s
