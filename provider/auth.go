@@ -122,6 +122,20 @@ func (a *Authenticator) Authenticate(ctx context.Context) (*Credentials, error) 
 	return creds, nil
 }
 
+// Login forces a full device-flow login, bypassing any cached
+// credentials, and persists the result. Callers reach for this when a
+// Copilot API request itself is rejected with an auth error despite the
+// Authenticator's own cache believing the token was still valid — e.g.
+// the Copilot token was revoked out from under it — as opposed to
+// Authenticate, which trusts a not-yet-expired cached token.
+func (a *Authenticator) Login(ctx context.Context) (*Credentials, error) {
+	path, err := a.path()
+	if err != nil {
+		return nil, err
+	}
+	return a.login(ctx, path)
+}
+
 func (a *Authenticator) path() (string, error) {
 	if a.CredentialsPath != "" {
 		return a.CredentialsPath, nil

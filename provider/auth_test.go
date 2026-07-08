@@ -291,3 +291,58 @@ func TestAuthenticate(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthenticatorLogin_ForcesFullFlowIgnoringCache confirms Login
+// always runs the device-flow login even when an unexpired, cache-valid
+// credential is already on disk — the behavior Copilot.Complete depends
+// on to recover when the API rejects a token the cache still trusts.
+func TestAuthenticatorLogin_ForcesFullFlowIgnoringCache(t *testing.T) {
+	deviceCodeSrv := jsonServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, deviceCodeResponse{
+			DeviceCode:      "device-forced",
+			UserCode:        "FORCED-CODE",
+			VerificationURI: "https://github.com/login/device",
+			ExpiresIn:       900,
+			Interval:        0,
+		})
+	})
+	accessTokenSrv := jsonServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, accessTokenResponse{AccessToken: "gho_forced"})
+	})
+	copilotTokenSrv := jsonServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, copilotTokenResponse{Token: "tid=forced", ExpiresAt: time.Now().Add(time.Hour).Unix()})
+	})
+
+	a := NewAuthenticator()
+	a.Endpoints = Endpoints{
+		DeviceCode:   deviceCodeSrv.URL,
+		AccessToken:  accessTokenSrv.URL,
+		CopilotToken: copilotTokenSrv.URL,
+	}
+	a.CredentialsPath = filepath.Join(t.TempDir(), "credentials.json")
+	a.Prompt = func(string, string) {}
+
+	if err := saveCredentials(a.CredentialsPath, &Credentials{
+		GitHubToken:        "gho_still_valid_looking",
+		CopilotToken:       "tid=still_valid_looking",
+		CopilotTokenExpiry: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("saveCredentials: %v", err)
+	}
+
+	got, err := a.Login(context.Background())
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if got.GitHubToken != "gho_forced" || got.CopilotToken != "tid=forced" {
+		t.Errorf("Login = %+v, want freshly issued tokens despite valid cache", got)
+	}
+
+	onDisk, err := loadCredentials(a.CredentialsPath)
+	if err != nil {
+		t.Fatalf("loadCredentials: %v", err)
+	}
+	if onDisk.GitHubToken != "gho_forced" {
+		t.Errorf("persisted GitHubToken = %q, want gho_forced", onDisk.GitHubToken)
+	}
+}
