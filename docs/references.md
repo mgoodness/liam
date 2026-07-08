@@ -1,0 +1,9 @@
+# Design references
+
+External writing that shaped liam's design. Cited from the v1 spec ([#1](https://github.com/mgoodness/liam/issues/1)); kept here so the pointers outlive the issues.
+
+- **Mario Zechner, [The pi coding agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)** — the primary design template: sub-1000-token system prompt, four core tools (read/write/edit/bash), YOLO mode, and the list of deliberate exclusions (no MCP, no sub-agents, no plan mode, no compaction).
+- **Lucas Neves Pereira, [What I Learned Building an AI Agent Loop in Go](https://dev.to/lucasnevespereira/what-i-learned-building-an-ai-agent-loop-in-go-5be0)** — source of three loop rules we adopted: terminate on the absence of tool calls (never on finish reason, which can read `length` while tool calls are present); append text + tool calls as one assistant message; return tool failures as tool results instead of aborting.
+- **Sebastian Raschka, [Components of a Coding Agent](https://magazine.sebastianraschka.com/p/components-of-a-coding-agent)** — source of the tool-output cap: with no compaction, one unbounded read can flood the context window, so every tool result is truncated beyond a hard limit. Its working-memory/transcript split and prompt-caching layers are noted for post-v1.
+- **Armin Ronacher, [Agents Are Hard](https://lucumr.pocoo.org/2025/11/21/agents-are-hard/)** — reinforces implementing providers directly rather than through SDK abstractions. Its reinforcement-injection, cache-point, and failure-isolation lessons are deferred past v1.
+- **Zep, [Agentic Development in Go](https://blog.getzep.com/agentic-development-in-go/)** — validates the ~40-line hand-written loop behind a minimal Provider interface and `context.Context` cancellation. Its parallel tool execution was deliberately **not** adopted: v1 runs tool calls sequentially so filesystem writes never interleave.
