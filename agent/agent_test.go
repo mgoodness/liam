@@ -265,9 +265,41 @@ func TestRun_MultipleRoundsOfToolCallsBeforeTerminating(t *testing.T) {
 	if len(updated) != 6 {
 		t.Fatalf("updated history has %d messages, want 6: %+v", len(updated), updated)
 	}
-	for _, p := range []string{pathA, pathB} {
-		if _, err := os.Stat(p); err != nil {
-			t.Errorf("expected %s to have been written: %v", p, err)
+	for _, path := range []string{pathA, pathB} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected %s to have been written: %v", path, err)
 		}
+	}
+}
+
+func TestRun_UnknownToolNameReturnsError(t *testing.T) {
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{ToolCalls: []provider.ToolCall{
+				{ID: "call-1", Name: "does-not-exist", Arguments: json.RawMessage(`{}`)},
+			}},
+		},
+	}
+	history := []provider.Message{{Role: provider.RoleUser, Content: "do something"}}
+
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, history); err == nil {
+		t.Fatal("expected an error when the Provider requests a tool name outside the dispatch table, per tool.Call's contract that this is a bug, not a soft failure")
+	}
+}
+
+func TestRun_DoesNotAliasCallersHistoryBackingArray(t *testing.T) {
+	backing := make([]provider.Message, 1, 4)
+	backing[0] = provider.Message{Role: provider.RoleUser, Content: "hi"}
+
+	p := &fakeProvider{responses: []provider.Response{{Text: "hello"}}}
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, backing); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	// Grow the original slice back over its spare capacity and check Run
+	// didn't write the appended message into it behind the caller's back.
+	grown := backing[:cap(backing)]
+	if grown[1].Role != "" || grown[1].Content != "" {
+		t.Errorf("Run wrote into the caller's spare backing-array capacity: %+v", grown[1])
 	}
 }
