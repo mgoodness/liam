@@ -6,18 +6,19 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mgoodness/liam/provider"
 	"github.com/mgoodness/liam/tool"
 )
 
-// Run drives the agent loop against p, starting from history, executing
-// tool calls via tools. It returns the final assistant text once a
-// response contains no tool calls, along with the full updated history
-// (including every appended assistant and tool-result message) so the
-// caller can continue the conversation.
-func Run(ctx context.Context, p provider.Provider, tools map[string]tool.Tool, history []provider.Message) (string, []provider.Message, error) {
+// Run drives the agent loop against p, starting from history and executing
+// tool calls via the tool package's dispatch table (tool.Call). It returns
+// the final assistant text once a response contains no tool calls, along
+// with the full updated history (including every appended assistant and
+// tool-result message) so the caller can continue the conversation.
+func Run(ctx context.Context, p provider.Provider, history []provider.Message) (string, []provider.Message, error) {
 	// Own copy: append below must never write into spare capacity of the
 	// caller's backing array, which would mutate their slice out from
 	// under them.
@@ -39,9 +40,12 @@ func Run(ctx context.Context, p provider.Provider, tools map[string]tool.Tool, h
 		}
 
 		for _, call := range resp.ToolCalls {
-			result, err := callTool(ctx, tools, call)
-			if err != nil {
+			result, err := tool.Call(ctx, call.Name, call.Arguments)
+			if errors.Is(err, tool.ErrUnknownTool) {
 				return "", history, err
+			}
+			if err != nil {
+				result = fmt.Sprintf("error: %s", err)
 			}
 			history = append(history, provider.Message{
 				Role:       provider.RoleTool,
@@ -50,23 +54,4 @@ func Run(ctx context.Context, p provider.Provider, tools map[string]tool.Tool, h
 			})
 		}
 	}
-}
-
-// callTool invokes call via tools and returns the text to feed back to the
-// model as the tool's result: the tool's own output on success, or a
-// description of the failure on error — a failing tool call is reported
-// to the model, not the caller, so the loop keeps running. An unknown
-// tool name is instead returned as a Go error, mirroring tool.Call's
-// contract that this signals the Provider requesting a tool outside the
-// definitions it was given, not a tool-execution failure to relay back.
-func callTool(ctx context.Context, tools map[string]tool.Tool, call provider.ToolCall) (string, error) {
-	t, ok := tools[call.Name]
-	if !ok {
-		return "", fmt.Errorf("unknown tool %q", call.Name)
-	}
-	result, err := t.Handler(ctx, call.Arguments)
-	if err != nil {
-		return fmt.Sprintf("error: %s", err), nil
-	}
-	return tool.Truncate(result), nil
 }
