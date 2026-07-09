@@ -81,3 +81,13 @@ func TestBash_MissingCommand(t *testing.T) {
 		t.Fatal("expected error for missing command")
 	}
 }
+
+func TestBashSummarize_ShowsCommand(t *testing.T) {
+	args, err := json.Marshal(map[string]string{"command": "ls -la /tmp"})
+	if err != nil {
+		t.Fatalf("marshaling args: %v", err)
+	}
+	if got, want := bashSummarize(args), "ls -la /tmp"; got != want {
+		t.Errorf("bashSummarize(%s) = %q, want %q", args, got, want)
+	}
+}

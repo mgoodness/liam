@@ -50,3 +50,14 @@ func Write(ctx context.Context, args json.RawMessage) (string, error) {
 
 	return fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.Path), nil
 }
+
+// writeSummarize renders the path being written, for progress reporting. It
+// ignores a parse failure and returns the empty string, since Handler will
+// itself fail on the same malformed args and report the error properly.
+func writeSummarize(args json.RawMessage) string {
+	var a writeArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	return a.Path
+}

@@ -80,3 +80,14 @@ func runBash(ctx context.Context, args json.RawMessage, defaultTimeout time.Dura
 
 	return fmt.Sprintf("exit code: %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String()), nil
 }
+
+// bashSummarize renders the command being run, for progress reporting. It
+// ignores a parse failure and returns the empty string, since Handler will
+// itself fail on the same malformed args and report the error properly.
+func bashSummarize(args json.RawMessage) string {
+	var a bashArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	return a.Command
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -59,5 +60,37 @@ func TestRunSession_MidTurnErrorIsPrintedAndSessionContinues(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "recovered") {
 		t.Errorf("out = %q, want the session to have continued to the next prompt and completed it", out.String())
+	}
+}
+
+func TestRunSession_PrintsProgressForIntermediateTextAndToolCalls(t *testing.T) {
+	in := strings.NewReader("do it\n\n/exit\n")
+	var out bytes.Buffer
+
+	args, err := json.Marshal(map[string]string{"command": "echo hi"})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{
+				Text:      "working on it",
+				ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "bash", Arguments: args}},
+			},
+			{Text: "all done"},
+		},
+	}
+
+	runSession(context.Background(), in, &out, &out, p, "you are liam")
+	got := out.String()
+
+	if !strings.Contains(got, "working on it") {
+		t.Errorf("out = %q, want the intermediate assistant text printed", got)
+	}
+	if !strings.Contains(got, "bash") || !strings.Contains(got, "echo hi") {
+		t.Errorf("out = %q, want a tool-call summary naming the tool and its command", got)
+	}
+	if !strings.Contains(got, "all done") {
+		t.Errorf("out = %q, want the final assistant text printed", got)
 	}
 }

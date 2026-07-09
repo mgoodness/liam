@@ -85,3 +85,13 @@ func TestEdit_FileNotFound(t *testing.T) {
 		t.Fatal("expected error for nonexistent file")
 	}
 }
+
+func TestEditSummarize_ShowsPath(t *testing.T) {
+	args, err := json.Marshal(map[string]string{"path": "/tmp/f.txt", "old_text": "a", "new_text": "b"})
+	if err != nil {
+		t.Fatalf("marshaling args: %v", err)
+	}
+	if got, want := editSummarize(args), "/tmp/f.txt"; got != want {
+		t.Errorf("editSummarize(%s) = %q, want %q", args, got, want)
+	}
+}

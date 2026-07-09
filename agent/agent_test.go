@@ -39,7 +39,7 @@ func TestRun_NoToolCalls_ReturnsFinalText(t *testing.T) {
 		{Role: provider.RoleUser, Content: "hi"},
 	}
 
-	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestRun_ExecutesToolCallAndContinuesUntilNoToolCalls(t *testing.T) {
 		{Role: provider.RoleUser, Content: "write a greeting file"},
 	}
 
-	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestRun_CombinesTextAndToolCallsIntoOneMessage(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "write a file"}}
 
-	if _, updated, err := agent.Run(context.Background(), p, tool.Tools, history); err != nil {
+	if _, updated, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	} else {
 		msg := updated[1]
@@ -173,7 +173,7 @@ func TestRun_ExecutesToolCallsSequentiallyInOrder(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "write then edit"}}
 
-	if _, updated, err := agent.Run(context.Background(), p, tool.Tools, history); err != nil {
+	if _, updated, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	} else {
 		writeResult := updated[2]
@@ -211,7 +211,7 @@ func TestRun_FailingToolCallFeedsErrorBackAndContinues(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "read a missing file"}}
 
-	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{})
 	if err != nil {
 		t.Fatalf("Run should not abort on a failing tool call, got error: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestRun_MultipleRoundsOfToolCallsBeforeTerminating(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "write two files"}}
 
-	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -282,8 +282,167 @@ func TestRun_UnknownToolNameReturnsError(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "do something"}}
 
-	if _, _, err := agent.Run(context.Background(), p, tool.Tools, history); err == nil {
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{}); err == nil {
 		t.Fatal("expected an error when the Provider requests a tool name outside the dispatch table, per tool.Call's contract that this is a bug, not a soft failure")
+	}
+}
+
+func TestRun_OnToolCallFiresBeforeExecutionAndOnToolResultAfter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "greeting.txt")
+	args, err := json.Marshal(map[string]string{"path": path, "content": "hi"})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "write", Arguments: args}}},
+			{Text: "done"},
+		},
+	}
+	history := []provider.Message{{Role: provider.RoleUser, Content: "write a greeting file"}}
+
+	type toolCallEvent struct {
+		name string
+		args json.RawMessage
+	}
+	type toolResultEvent struct {
+		name   string
+		result string
+		err    error
+	}
+	var calls []toolCallEvent
+	var results []toolResultEvent
+
+	cb := agent.Callbacks{
+		OnToolCall: func(name string, args json.RawMessage) {
+			calls = append(calls, toolCallEvent{name, args})
+		},
+		OnToolResult: func(name, result string, err error) {
+			results = append(results, toolResultEvent{name, result, err})
+		},
+	}
+
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, history, cb); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("OnToolCall fired %d times, want 1: %+v", len(calls), calls)
+	}
+	if calls[0].name != "write" || string(calls[0].args) != string(args) {
+		t.Errorf("OnToolCall event = %+v, want name %q args %s", calls[0], "write", args)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("OnToolResult fired %d times, want 1: %+v", len(results), results)
+	}
+	wantResult := fmt.Sprintf("wrote %d bytes to %s", len("hi"), path)
+	if results[0].name != "write" || results[0].result != wantResult || results[0].err != nil {
+		t.Errorf("OnToolResult event = %+v, want name %q result %q err nil", results[0], "write", wantResult)
+	}
+}
+
+func TestRun_OnToolResultReceivesSameStringFedBackIntoHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "missing.txt")
+	readArgs, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		t.Fatalf("marshal read args: %v", err)
+	}
+
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "read", Arguments: readArgs}}},
+			{Text: "that file doesn't exist"},
+		},
+	}
+	history := []provider.Message{{Role: provider.RoleUser, Content: "read a missing file"}}
+
+	var gotResult string
+	var gotErr error
+	cb := agent.Callbacks{
+		OnToolResult: func(name, result string, err error) {
+			gotResult = result
+			gotErr = err
+		},
+	}
+
+	_, updated, err := agent.Run(context.Background(), p, tool.Tools, history, cb)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	toolResult := updated[2]
+	if gotResult != toolResult.Content {
+		t.Errorf("OnToolResult result = %q, want it to match the string fed into history %q", gotResult, toolResult.Content)
+	}
+	if gotErr == nil {
+		t.Error("OnToolResult err = nil, want the underlying tool error for a failing call")
+	}
+}
+
+func TestRun_OnTextFiresForIntermediateAndFinalText(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	args, err := json.Marshal(map[string]string{"path": path, "content": "hi"})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{
+				Text:      "sure, writing that now",
+				ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "write", Arguments: args}},
+			},
+			{Text: "done"},
+		},
+	}
+	history := []provider.Message{{Role: provider.RoleUser, Content: "write a file"}}
+
+	var texts []string
+	cb := agent.Callbacks{
+		OnText: func(text string) {
+			texts = append(texts, text)
+		},
+	}
+
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, history, cb); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	want := []string{"sure, writing that now", "done"}
+	if len(texts) != len(want) {
+		t.Fatalf("OnText fired %d times, want %d: %+v", len(texts), len(want), texts)
+	}
+	for i, w := range want {
+		if texts[i] != w {
+			t.Errorf("texts[%d] = %q, want %q", i, texts[i], w)
+		}
+	}
+}
+
+func TestRun_NilCallbackFieldsAreNotInvoked(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	args, err := json.Marshal(map[string]string{"path": path, "content": "hi"})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "write", Arguments: args}}},
+			{Text: "done"},
+		},
+	}
+	history := []provider.Message{{Role: provider.RoleUser, Content: "write a file"}}
+
+	// A zero-value Callbacks{} must not panic despite every field being nil.
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, history, agent.Callbacks{}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
 	}
 }
 
@@ -292,7 +451,7 @@ func TestRun_DoesNotAliasCallersHistoryBackingArray(t *testing.T) {
 	backing[0] = provider.Message{Role: provider.RoleUser, Content: "hi"}
 
 	p := &fakeProvider{responses: []provider.Response{{Text: "hello"}}}
-	if _, _, err := agent.Run(context.Background(), p, tool.Tools, backing); err != nil {
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, backing, agent.Callbacks{}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 

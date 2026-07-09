@@ -47,19 +47,25 @@ type Property struct {
 type Handler func(ctx context.Context, args json.RawMessage) (string, error)
 
 // Tool pairs a tool's schema Definition with the Handler that executes it.
+// Summarize is optional: when set, it renders a one-line, human-readable
+// description of a call to this tool (e.g. bash's command, read's path)
+// for progress reporting. A tool with no Summarize has nothing sensible to
+// show beyond its name — the display layer falls back to that.
 type Tool struct {
 	Definition Definition
 	Handler    Handler
+	Summarize  func(args json.RawMessage) string
 }
 
 // Tools is the always-available core dispatch table: read, write, edit,
 // bash, and web_fetch, present in every tool set New builds regardless of
-// environment.
+// environment. Each also carries an optional Summarize for progress
+// reporting, except web_fetch, which falls back to showing just its name.
 var Tools = map[string]Tool{
-	"read":      {Definition: readDefinition, Handler: Read},
-	"write":     {Definition: writeDefinition, Handler: Write},
-	"edit":      {Definition: editDefinition, Handler: Edit},
-	"bash":      {Definition: bashDefinition, Handler: Bash},
+	"read":      {Definition: readDefinition, Handler: Read, Summarize: readSummarize},
+	"write":     {Definition: writeDefinition, Handler: Write, Summarize: writeSummarize},
+	"edit":      {Definition: editDefinition, Handler: Edit, Summarize: editSummarize},
+	"bash":      {Definition: bashDefinition, Handler: Bash, Summarize: bashSummarize},
 	"web_fetch": {Definition: webFetchDefinition, Handler: WebFetch},
 }
 
