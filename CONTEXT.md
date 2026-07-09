@@ -5,11 +5,11 @@ A minimal, opinionated coding agent harness, in the spirit of Mario Zechner's [p
 ## Language
 
 **Provider**:
-The abstraction over a single LLM backend — handles authentication and turns a message history into a model response. v1 has exactly one implementation, Copilot Chat.
+The abstraction over a single LLM backend — handles authentication and turns a message history into a model response. v0.1 has exactly one implementation, Copilot Chat.
 _Avoid_: Model, backend, client (too generic — those mean the underlying LLM or its SDK, not this abstraction).
 
 **Tool**:
-A capability the model can invoke as part of a response — one of `read`, `write`, `edit`, or `bash` in v1. Distinct from the Go `tool` package that implements them.
+A capability the model can invoke as part of a response — one of `read`, `write`, `edit`, or `bash` in v0.1. Distinct from the Go `tool` package that implements them.
 _Avoid_: Function, action.
 
 **Agent loop**:
@@ -17,7 +17,7 @@ The core control flow: send the message history to the Provider, execute any Too
 _Avoid_: Orchestrator, pipeline.
 
 **YOLO mode**:
-The v1 safety stance: Tool calls execute immediately with no confirmation prompt and no sandboxing. Adopted from pi's position that permission checks are theater once arbitrary code execution is already allowed.
+The v0.1 safety stance: Tool calls execute immediately with no confirmation prompt and no sandboxing. Adopted from pi's position that permission checks are theater once arbitrary code execution is already allowed.
 _Avoid_: Unsafe mode, unrestricted mode.
 
 **GitHub OAuth token vs. Copilot token**:

@@ -49,11 +49,11 @@ Four packages, each with a narrow job:
 - **`agent`** — the loop tying a `Provider` and the tool dispatch table together: call the provider, run any tool calls, feed results back, repeat until a response has none.
 - **`cmd/liam`** — the REPL and CLI wiring that make it a runnable program.
 
-v1 has no third-party Go dependencies — `net/http`, `encoding/json`, `os/exec`, and `context` cover everything it needs.
+v0.1 has no third-party Go dependencies — `net/http`, `encoding/json`, `os/exec`, and `context` cover everything it needs.
 
 ## Status
 
-v1 is feature-complete against its [original spec](https://github.com/mgoodness/liam/issues/1): device-flow auth, the four tools, and an interactive REPL, all backed by Copilot Chat. Deliberately out of scope for now: session save/resume, hierarchical `AGENTS.md` project context, custom slash commands, streaming responses, and any permission/confirmation layer (YOLO mode is a final decision, not a placeholder). See the spec issue and [`docs/adr/`](docs/adr/) for the reasoning behind what's here and what isn't.
+v0.1 is feature-complete against its [original spec](https://github.com/mgoodness/liam/issues/1): device-flow auth, the four tools, and an interactive REPL, all backed by Copilot Chat. Deliberately out of scope for now: session save/resume, hierarchical `AGENTS.md` project context, custom slash commands, streaming responses, a TUI input layer (Shift+Enter, paste detection), and any permission/confirmation layer (YOLO mode is a final decision, not a placeholder). A TUI input layer is planned for v0.2. See the spec issue and [`docs/adr/`](docs/adr/) for the reasoning behind what's here and what isn't.
 
 ## License
 
