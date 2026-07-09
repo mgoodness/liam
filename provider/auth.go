@@ -23,6 +23,14 @@ const (
 	defaultScope    = "read:user"
 
 	grantTypeDeviceCode = "urn:ietf:params:oauth:grant-type:device_code"
+
+	// The Copilot token exchange rejects requests with 403 "Please only use
+	// approved clients for Copilot" unless they also identify as a
+	// recognized editor client — the same requirement copilot.go's
+	// editorVersion/editorPluginVersion constants exist for, reused here.
+	// User-Agent isn't required by the chat-completions endpoint those
+	// constants were added for, but the token exchange does check it.
+	copilotUserAgent = "GitHubCopilotChat/0.12.0"
 )
 
 // Endpoints holds the GitHub URLs used during device-flow login and Copilot
@@ -262,10 +270,13 @@ type copilotTokenResponse struct {
 }
 
 // exchangeCopilotToken trades a GitHub OAuth token for a short-lived
-// Copilot token. A 401 means the GitHub token itself was rejected
-// (ErrTokenInvalid, which should trigger a full re-login); any other
-// non-200 status (e.g. a 403 for an account with no active Copilot seat) is
-// a distinct, non-auth failure that's returned as-is.
+// Copilot token. The request must present as a recognized editor client
+// (Editor-Version/Editor-Plugin-Version/User-Agent) or GitHub rejects it
+// with 403 "Please only use approved clients for Copilot" regardless of
+// whether the token itself is valid. A 401 means the GitHub token itself
+// was rejected (ErrTokenInvalid, which should trigger a full re-login); any
+// other non-200 status (e.g. a 403 for an account with no active Copilot
+// seat) is a distinct, non-auth failure that's returned as-is.
 func (a *Authenticator) exchangeCopilotToken(ctx context.Context, githubToken string) (*copilotTokenResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.Endpoints.CopilotToken, nil)
 	if err != nil {
@@ -273,6 +284,9 @@ func (a *Authenticator) exchangeCopilotToken(ctx context.Context, githubToken st
 	}
 	req.Header.Set("Authorization", "token "+githubToken)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Editor-Version", editorVersion)
+	req.Header.Set("Editor-Plugin-Version", editorPluginVersion)
+	req.Header.Set("User-Agent", copilotUserAgent)
 
 	resp, err := a.HTTPClient.Do(req)
 	if err != nil {

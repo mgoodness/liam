@@ -110,6 +110,19 @@ func TestAuthenticate(t *testing.T) {
 				if got := r.Header.Get("Authorization"); got != "token gho_test123" {
 					t.Errorf("Authorization header = %q, want %q", got, "token gho_test123")
 				}
+				// GitHub's real backend 403s "Please only use approved
+				// clients for Copilot" without these — the mock can't
+				// enforce that itself, but it can lock down that we always
+				// send them.
+				if got := r.Header.Get("Editor-Version"); got != editorVersion {
+					t.Errorf("Editor-Version header = %q, want %q", got, editorVersion)
+				}
+				if got := r.Header.Get("Editor-Plugin-Version"); got != editorPluginVersion {
+					t.Errorf("Editor-Plugin-Version header = %q, want %q", got, editorPluginVersion)
+				}
+				if got := r.Header.Get("User-Agent"); got != copilotUserAgent {
+					t.Errorf("User-Agent header = %q, want %q", got, copilotUserAgent)
+				}
 				writeJSON(t, w, copilotTokenResponse{Token: "tid=copilot123", ExpiresAt: time.Now().Add(time.Hour).Unix()})
 			},
 			check: func(t *testing.T, a *Authenticator, got *Credentials) {
