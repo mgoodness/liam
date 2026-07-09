@@ -18,7 +18,7 @@ import (
 // spirit of pi's sub-1000-token system prompt (see docs/references.md).
 const systemPrompt = `You are liam, a minimal coding agent running directly in the user's terminal.
 
-You have four tools: read, write, edit, and bash. Use them freely to inspect and modify the user's project and to run commands (build, test, etc.) — there is no confirmation step, so act directly rather than describing what you would do.
+You have five tools: read, write, edit, bash, and web_fetch. Use them freely to inspect and modify the user's project, run commands (build, test, etc.), and fetch URLs — there is no confirmation step, so act directly rather than describing what you would do.
 
 Prefer edit for targeted changes to existing files; use write only for new files or full rewrites. Keep responses concise.`
 
@@ -32,7 +32,7 @@ func main() {
 	runSession(context.Background(), os.Stdin, os.Stdout, os.Stderr, p, systemPrompt)
 }
 
-// toolDefinitions returns the v1 tool set's Definitions in a stable
+// toolDefinitions returns the tool set's Definitions in a stable
 // (name-sorted) order, so the Provider's request body doesn't vary across
 // runs due to Go's randomized map iteration.
 func toolDefinitions() []tool.Definition {

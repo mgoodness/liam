@@ -1,5 +1,5 @@
-// Package tool implements liam's v1 Tools — read, write, edit, and bash —
-// behind a fixed dispatch table keyed by tool name.
+// Package tool implements liam's Tools — read, write, edit, bash, and
+// web_fetch — behind a fixed dispatch table keyed by tool name.
 package tool
 
 import (
@@ -53,10 +53,11 @@ type Tool struct {
 // Tools is the fixed dispatch table mapping tool name to its Definition and
 // Handler for the v1 tool set.
 var Tools = map[string]Tool{
-	"read":  {Definition: readDefinition, Handler: Read},
-	"write": {Definition: writeDefinition, Handler: Write},
-	"edit":  {Definition: editDefinition, Handler: Edit},
-	"bash":  {Definition: bashDefinition, Handler: Bash},
+	"read":      {Definition: readDefinition, Handler: Read},
+	"write":     {Definition: writeDefinition, Handler: Write},
+	"edit":      {Definition: editDefinition, Handler: Edit},
+	"bash":      {Definition: bashDefinition, Handler: Bash},
+	"web_fetch": {Definition: webFetchDefinition, Handler: WebFetch},
 }
 
 // ErrUnknownTool is wrapped into the error Call returns when name isn't in
