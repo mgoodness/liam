@@ -2,9 +2,28 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"strings"
 	"testing"
 )
+
+// failingReader returns errFailingRead after yielding some initial bytes,
+// simulating a genuine I/O failure (e.g. a broken pipe) distinct from EOF.
+type failingReader struct {
+	data []byte
+	pos  int
+}
+
+var errFailingRead = errors.New("simulated read failure")
+
+func (f *failingReader) Read(p []byte) (int, error) {
+	if f.pos >= len(f.data) {
+		return 0, errFailingRead
+	}
+	n := copy(p, f.data[f.pos:])
+	f.pos += n
+	return n, nil
+}
 
 func TestNextMessage_BlankLineTerminatesMultiLineMessage(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("line one\nline two\n\nnext message\n"))
@@ -100,5 +119,14 @@ func TestNextMessage_LeadingBlankLinesAreIgnored(t *testing.T) {
 	}
 	if msg != "real message" {
 		t.Errorf("msg = %q, want %q", msg, "real message")
+	}
+}
+
+func TestNextMessage_GenuineReadErrorIsPropagatedNotSwallowed(t *testing.T) {
+	r := bufio.NewReader(&failingReader{data: []byte("partial line")})
+
+	_, _, err := nextMessage(r)
+	if !errors.Is(err, errFailingRead) {
+		t.Fatalf("err = %v, want it to wrap %v: a genuine read error must not be treated the same as a clean EOF", err, errFailingRead)
 	}
 }
