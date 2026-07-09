@@ -34,7 +34,7 @@ func (f *fakeProvider) Complete(ctx context.Context, messages []provider.Message
 }
 
 func TestRunSession_SubmittedMessageDrivesAgentLoopAndPrintsResult(t *testing.T) {
-	in := strings.NewReader("hi there\n\n/exit\n")
+	in := strings.NewReader("hi there\r/exit\r")
 	var out bytes.Buffer
 	p := &fakeProvider{responses: []provider.Response{{Text: "hello back"}}}
 
@@ -46,7 +46,7 @@ func TestRunSession_SubmittedMessageDrivesAgentLoopAndPrintsResult(t *testing.T)
 }
 
 func TestRunSession_MidTurnErrorIsPrintedAndSessionContinues(t *testing.T) {
-	in := strings.NewReader("first message\n\nsecond message\n\n/exit\n")
+	in := strings.NewReader("first message\rsecond message\r/exit\r")
 	var out, errOut bytes.Buffer
 	p := &fakeProvider{
 		errs:      []error{errors.New("network failure")},
@@ -64,7 +64,7 @@ func TestRunSession_MidTurnErrorIsPrintedAndSessionContinues(t *testing.T) {
 }
 
 func TestRunSession_PrintsProgressForIntermediateTextAndToolCalls(t *testing.T) {
-	in := strings.NewReader("do it\n\n/exit\n")
+	in := strings.NewReader("do it\r/exit\r")
 	var out bytes.Buffer
 
 	args, err := json.Marshal(map[string]string{"command": "echo hi"})
