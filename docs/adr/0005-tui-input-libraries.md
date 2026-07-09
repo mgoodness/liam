@@ -1,0 +1,13 @@
+# TUI input built on x/term + charmbracelet/x/ansi + charmbracelet/x/input, not full Bubble Tea
+
+For the v0.2 TUI input layer (ADR 0002), liam uses `golang.org/x/term` for raw-mode toggling, plus `charmbracelet/x/ansi` (Kitty keyboard protocol escape sequences) and `charmbracelet/x/input` (parsing raw bytes into structured key and bracketed-paste events) for everything else. These are the same low-level packages Bubble Tea itself uses internally — genuinely low-level utilities, not a framework: no `Model`/`Update`/`View` imposition, no forced render loop, nothing that conflicts with liam's hand-written, no-framework agent loop.
+
+Matching pi's own approach (see ADR 0002), the Kitty keyboard protocol is the only protocol implemented, with `Ctrl+J` bound as a universal "insert newline, don't submit" fallback for terminals that don't support it (xterm `modifyOtherKeys`, and Terminal.app's own local-only, SSH-incompatible workaround, are both deliberately not implemented — `Ctrl+J` already covers those terminals without OS-specific code).
+
+`charmbracelet/x/input`'s bracketed-paste parsing turns out to also resolve a problem from `AGENTS.md` v0.1's input design: `bufio.Reader.Buffered()` paste-detection could split a message in two if pasted content had no trailing newline and was immediately followed by more manual typing. Bracketed paste gives an unambiguous protocol-level marker regardless of trailing newlines, so this same work fixes both problems.
+
+## Considered Options
+
+- **`golang.org/x/term` alone** — raw-mode toggling only; Kitty protocol negotiation, CSI-u parsing, and bracketed-paste detection would all need to be hand-written. More custom protocol-parsing code and more surface for subtle bugs a specialized library has already worked through.
+- **`x/term` + `charmbracelet/x/ansi` + `charmbracelet/x/input`** (chosen) — reuses Bubble Tea's own battle-tested parsing without adopting Bubble Tea as a framework. Two more dependencies, from a semi-experimental `x/*` namespace rather than a stable v1 — mitigated by Bubble Tea's own production dependency on them.
+- **Full Bubble Tea** — handles everything, but reverses the actual decision in ADR 0002: it wants to own the entire event loop and all rendering (`Model`/`Update`/`View`), not just parse input events, which is a much bigger scope than "detect Shift+Enter and paste reliably." The REPL's plain sequential `stdout` rendering stays unchanged either way in the option we chose; adopting Bubble Tea later remains a real, separate rewrite of the REPL's control flow if it's ever worth it — the agent/provider/tool packages are unaffected regardless, since they're already decoupled from input/rendering.
