@@ -85,7 +85,7 @@ var skippedElements = map[string]bool{
 // content, so e.g. list items and paragraphs don't run together into one
 // unreadable line the way inline elements (span, a, strong, ...) should.
 var blockElements = map[string]bool{
-	"p": true, "div": true, "br": true, "li": true, "tr": true,
+	"p": true, "div": true, "br": true, "li": true, "tr": true, "td": true, "th": true,
 	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
 	"ul": true, "ol": true, "table": true, "section": true, "article": true,
 	"header": true, "footer": true, "nav": true, "blockquote": true, "hr": true,

@@ -88,3 +88,42 @@ func TestWebFetch_UnreachableHost(t *testing.T) {
 		t.Fatal("expected error for unreachable host")
 	}
 }
+
+func TestWebFetch_TableCellsAreSeparated(t *testing.T) {
+	const page = `<table><tr><td>A</td><td>B</td></tr></table>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(page))
+	}))
+	t.Cleanup(srv.Close)
+
+	got, err := callWebFetch(t, srv.URL)
+	if err != nil {
+		t.Fatalf("WebFetch: %v", err)
+	}
+	if strings.Contains(got, "AB") {
+		t.Errorf("expected adjacent table cells to be separated, got %q", got)
+	}
+}
+
+func TestWebFetch_ResultIsTruncatedByCall(t *testing.T) {
+	big := "<p>" + strings.Repeat("a", MaxResultBytes+100) + "</p>"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(big))
+	}))
+	t.Cleanup(srv.Close)
+
+	raw, err := json.Marshal(map[string]string{"url": srv.URL})
+	if err != nil {
+		t.Fatalf("marshaling args: %v", err)
+	}
+
+	got, err := Call(context.Background(), "web_fetch", raw)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if !strings.Contains(got, "[truncated:") {
+		t.Errorf("expected web_fetch result routed through Call to be truncated, got length %d with no truncation marker", len(got))
+	}
+}

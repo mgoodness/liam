@@ -51,7 +51,7 @@ type Tool struct {
 }
 
 // Tools is the fixed dispatch table mapping tool name to its Definition and
-// Handler for the v1 tool set.
+// Handler.
 var Tools = map[string]Tool{
 	"read":      {Definition: readDefinition, Handler: Read},
 	"write":     {Definition: writeDefinition, Handler: Write},
