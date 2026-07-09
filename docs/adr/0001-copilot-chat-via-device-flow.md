@@ -6,3 +6,7 @@ We want the harness to run on the user's existing Copilot subscription, not a se
 
 - **GitHub Models** — official, public, PAT-authenticated. Rejected: different product, different quota, doesn't use the Copilot subscription itself.
 - **Copilot Chat via device flow** (chosen) — unofficial/reverse-engineered, but the same mechanism VS Code, Neovim, and other third-party Copilot clients rely on.
+
+## Consequences
+
+The masquerade isn't limited to the OAuth `client_id` — every request to a `*.githubcopilot.com` endpoint (token exchange, chat completions) must also present `Editor-Version`/`Editor-Plugin-Version`/`User-Agent` headers identifying a recognized editor client, or GitHub 403s with "Please only use approved clients for Copilot" regardless of whether the token itself is valid. This bit us once already (the token-exchange endpoint was missing these while the chat-completions endpoint already had them) — see the `provider/auth.go` header constants.
