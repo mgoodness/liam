@@ -2,6 +2,7 @@ package skill
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,55 @@ func writeSkill(t *testing.T, dir, name, frontmatter, body string) string {
 		t.Fatalf("writing SKILL.md: %v", err)
 	}
 	return skillDir
+}
+
+// captureStderr redirects the real os.Stderr to a pipe for the duration of
+// fn, returning whatever fn wrote to it. Discover warns by writing
+// directly to os.Stderr rather than through an injected io.Writer, so
+// this is the seam available to observe that warning without a mock.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer: %v", err)
+	}
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("reading captured stderr: %v", err)
+	}
+	return buf.String()
+}
+
+func TestDiscover_WarnsOnInvalidNameRatherThanFailing(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "PDF-Processing",
+		"name: PDF-Processing\ndescription: A description.\n", "body\n")
+
+	var skills []Skill
+	var discoverErr error
+	stderr := captureStderr(t, func() {
+		skills, discoverErr = Discover([]string{dir})
+	})
+
+	if discoverErr != nil {
+		t.Fatalf("Discover: %v", discoverErr)
+	}
+	if len(skills) != 0 {
+		t.Fatalf("got %d skills, want 0: %+v", len(skills), skills)
+	}
+	if !strings.Contains(stderr, "PDF-Processing") {
+		t.Errorf("stderr = %q, want a warning naming the invalid skill", stderr)
+	}
 }
 
 func TestDiscover_ParsesOptionalFrontmatterFields(t *testing.T) {
@@ -88,6 +138,27 @@ func TestDiscover_SkipsInvalidNamesWithoutFailing(t *testing.T) {
 				t.Errorf("got %d skills, want 0 (invalid skill should be skipped): %+v", len(skills), skills)
 			}
 		})
+	}
+}
+
+func TestDiscover_AggregatesDistinctSkillsAcrossDirs(t *testing.T) {
+	global := t.TempDir()
+	project := t.TempDir()
+	writeSkill(t, global, "global-only",
+		"name: global-only\ndescription: Only in the global dir.\n", "body\n")
+	writeSkill(t, project, "project-only",
+		"name: project-only\ndescription: Only in the project dir.\n", "body\n")
+
+	skills, err := Discover([]string{global, project})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("got %d skills, want 2: %+v", len(skills), skills)
+	}
+	// Discover returns skills in name-sorted order.
+	if skills[0].Name != "global-only" || skills[1].Name != "project-only" {
+		t.Errorf("got skills %q, %q, want global-only, project-only", skills[0].Name, skills[1].Name)
 	}
 }
 
