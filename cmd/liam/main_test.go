@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mgoodness/liam/skill"
 )
 
 func TestFullSystemPrompt_AppendsDiscoveredAgentsMD(t *testing.T) {
@@ -44,5 +46,26 @@ func TestFullSystemPrompt_NoAgentsMDReturnsBasePromptUnchanged(t *testing.T) {
 	}
 	if errOut.Len() != 0 {
 		t.Errorf("unexpected stderr output: %q", errOut.String())
+	}
+}
+
+func TestAppendSkillIndex_NoEligibleSkillsReturnsBaseUnchanged(t *testing.T) {
+	got := appendSkillIndex("base prompt", nil)
+	if got != "base prompt" {
+		t.Errorf("appendSkillIndex = %q, want unchanged base prompt", got)
+	}
+}
+
+func TestAppendSkillIndex_AppendsIndexForEligibleSkill(t *testing.T) {
+	skills := []skill.Skill{
+		{Name: "pdf-processing", Description: "Handles PDFs.", Path: "/skills/pdf-processing"},
+	}
+
+	got := appendSkillIndex("base prompt", skills)
+	if !strings.HasPrefix(got, "base prompt\n\n") {
+		t.Errorf("appendSkillIndex = %q, want it to start with the base prompt followed by a blank line", got)
+	}
+	if !strings.Contains(got, "pdf-processing") {
+		t.Errorf("appendSkillIndex = %q, want it to contain the skill index", got)
 	}
 }
