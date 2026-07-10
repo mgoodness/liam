@@ -76,3 +76,13 @@ func TestWrite_MissingPath(t *testing.T) {
 		t.Fatal("expected error for missing path")
 	}
 }
+
+func TestWriteSummarize_ShowsPath(t *testing.T) {
+	args, err := json.Marshal(map[string]string{"path": "/tmp/f.txt", "content": "hello"})
+	if err != nil {
+		t.Fatalf("marshaling args: %v", err)
+	}
+	if got, want := writeSummarize(args), "/tmp/f.txt"; got != want {
+		t.Errorf("writeSummarize(%s) = %q, want %q", args, got, want)
+	}
+}

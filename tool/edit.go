@@ -66,3 +66,14 @@ func Edit(ctx context.Context, args json.RawMessage) (string, error) {
 
 	return fmt.Sprintf("edited %s", a.Path), nil
 }
+
+// editSummarize renders the path being edited, for progress reporting. It
+// ignores a parse failure and returns the empty string, since Handler will
+// itself fail on the same malformed args and report the error properly.
+func editSummarize(args json.RawMessage) string {
+	var a editArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	return a.Path
+}

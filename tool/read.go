@@ -66,3 +66,14 @@ func Read(ctx context.Context, args json.RawMessage) (string, error) {
 
 	return strings.Join(lines[start:end], "\n"), nil
 }
+
+// readSummarize renders the path being read, for progress reporting. It
+// ignores a parse failure and returns the empty string, since Handler will
+// itself fail on the same malformed args and report the error properly.
+func readSummarize(args json.RawMessage) string {
+	var a readArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	return a.Path
+}

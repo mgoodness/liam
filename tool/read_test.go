@@ -109,3 +109,13 @@ func TestRead_FileNotFound(t *testing.T) {
 		t.Fatal("expected error for nonexistent file")
 	}
 }
+
+func TestReadSummarize_ShowsPath(t *testing.T) {
+	args, err := json.Marshal(map[string]string{"path": "/tmp/f.txt"})
+	if err != nil {
+		t.Fatalf("marshaling args: %v", err)
+	}
+	if got, want := readSummarize(args), "/tmp/f.txt"; got != want {
+		t.Errorf("readSummarize(%s) = %q, want %q", args, got, want)
+	}
+}
