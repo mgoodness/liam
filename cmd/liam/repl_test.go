@@ -1,11 +1,41 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
-	"strings"
+	"io"
 	"testing"
+
+	"github.com/charmbracelet/x/input"
 )
+
+// chunkedReader delivers a fixed sequence of byte chunks, one per Read
+// call, simulating how bytes actually arrive from a terminal: each key
+// press or paste event tends to show up as its own read, rather than the
+// whole session arriving in one shot. It never splits a single chunk
+// across two Read calls, so a chunk must be a complete, well-formed escape
+// sequence or a single input event's raw bytes end-to-end.
+type chunkedReader struct {
+	chunks [][]byte
+	pos    int
+}
+
+func newChunkedReader(chunks ...string) *chunkedReader {
+	r := &chunkedReader{}
+	for _, c := range chunks {
+		r.chunks = append(r.chunks, []byte(c))
+	}
+	return r
+}
+
+func (r *chunkedReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[r.pos])
+	r.pos++
+	return n, nil
+}
 
 // failingReader returns errFailingRead after yielding some initial bytes,
 // simulating a genuine I/O failure (e.g. a broken pipe) distinct from EOF.
@@ -25,15 +55,62 @@ func (f *failingReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func TestNextMessage_BlankLineTerminatesMultiLineMessage(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("line one\nline two\n\nnext message\n"))
+// newTestSource builds an *eventSource over r, the same way runSession
+// does, so tests exercise the real Kitty-keyboard and bracketed-paste
+// parsing rather than a stand-in.
+func newTestSource(t *testing.T, r io.Reader) *eventSource {
+	t.Helper()
+	rd, err := input.NewReader(r, "", 0)
+	if err != nil {
+		t.Fatalf("input.NewReader: %v", err)
+	}
+	t.Cleanup(func() { rd.Close() })
+	return newEventSource(rd)
+}
 
-	msg, quit, err := nextMessage(r)
+func TestNextMessage_PlainEnterSubmitsImmediately(t *testing.T) {
+	rd := newTestSource(t, newChunkedReader("hello", "\r"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
 	if err != nil {
 		t.Fatalf("nextMessage returned error: %v", err)
 	}
 	if quit {
-		t.Fatal("nextMessage reported quit, want a submitted message")
+		t.Fatal("quit = true, want a submitted message")
+	}
+	if msg != "hello" {
+		t.Errorf("msg = %q, want %q", msg, "hello")
+	}
+}
+
+func TestNextMessage_PlainEnterViaKittyCSIUSubmitsImmediately(t *testing.T) {
+	// A real Kitty CSI-u sequence for a bare Enter keypress (code 13, no
+	// modifiers): CSI 13 u.
+	rd := newTestSource(t, newChunkedReader("hi", "\x1b[13u"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want a submitted message")
+	}
+	if msg != "hi" {
+		t.Errorf("msg = %q, want %q", msg, "hi")
+	}
+}
+
+func TestNextMessage_ShiftEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
+	// Real Kitty CSI-u sequence for Shift+Enter: CSI 13 ; 2 u (modifier
+	// value 2 = shift, encoded as mod-1 per the protocol).
+	rd := newTestSource(t, newChunkedReader("line one", "\x1b[13;2u", "line two", "\r"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want a submitted message")
 	}
 	want := "line one\nline two"
 	if msg != want {
@@ -41,17 +118,151 @@ func TestNextMessage_BlankLineTerminatesMultiLineMessage(t *testing.T) {
 	}
 }
 
+func TestNextMessage_CtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
+	// Ctrl+J is a literal LF byte (0x0A) — the universal fallback for
+	// terminals without Kitty keyboard support.
+	rd := newTestSource(t, newChunkedReader("line one", "\n", "line two", "\r"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want a submitted message")
+	}
+	want := "line one\nline two"
+	if msg != want {
+		t.Errorf("msg = %q, want %q", msg, want)
+	}
+}
+
+func TestNextMessage_BracketedPasteSubmitsAsSingleMessage(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{name: "with trailing newline", content: "first line\nsecond line\n"},
+		{name: "without trailing newline", content: "first line\nsecond line"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			paste := "\x1b[200~" + tc.content + "\x1b[201~"
+			rd := newTestSource(t, newChunkedReader(paste))
+
+			msg, quit, err := nextMessage(rd, io.Discard)
+			if err != nil {
+				t.Fatalf("nextMessage returned error: %v", err)
+			}
+			if quit {
+				t.Fatal("quit = true, want a submitted message")
+			}
+			if msg != tc.content {
+				t.Errorf("msg = %q, want %q", msg, tc.content)
+			}
+		})
+	}
+}
+
+func TestNextMessage_PasteFoldsInAlreadyTypedContent(t *testing.T) {
+	// A user typing part of a message, then pasting, must not lose the
+	// typed prefix — the paste submits everything accumulated so far,
+	// typed and pasted alike.
+	rd := newTestSource(t, newChunkedReader("before ", "\x1b[200~pasted\x1b[201~"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want a submitted message")
+	}
+	if want := "before pasted"; msg != want {
+		t.Errorf("msg = %q, want %q", msg, want)
+	}
+}
+
+func TestNextMessage_EchoesPastedContent(t *testing.T) {
+	// Raw mode disables the terminal's own local echo, so without this a
+	// pasted block would be invisible on screen even though it's captured
+	// and submitted correctly.
+	rd := newTestSource(t, newChunkedReader("\x1b[200~pasted\x1b[201~"))
+
+	var echo bytes.Buffer
+	if _, _, err := nextMessage(rd, &echo); err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if want := "pasted" + crlf; echo.String() != want {
+		t.Errorf("echo = %q, want %q", echo.String(), want)
+	}
+}
+
+func TestNextMessage_BracketedPasteThenManualTypingDoesNotResubmit(t *testing.T) {
+	// This is exactly the ambiguity the old bufio.Reader.Buffered()
+	// heuristic couldn't resolve (see ADR 0002): a paste with no trailing
+	// newline, immediately followed by more manual typing. Bracketed paste
+	// gives an unambiguous end marker, so the paste submits on its own and
+	// the following keystrokes start a fresh message.
+	rd := newTestSource(t, newChunkedReader("\x1b[200~pasted\x1b[201~", "typed", "\r"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit || msg != "pasted" {
+		t.Fatalf("first nextMessage = (%q, quit=%v), want (\"pasted\", false)", msg, quit)
+	}
+
+	msg, quit, err = nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit || msg != "typed" {
+		t.Fatalf("second nextMessage = (%q, quit=%v), want (\"typed\", false)", msg, quit)
+	}
+}
+
+func TestNextMessage_BackspaceErasesLastTypedCharacter(t *testing.T) {
+	rd := newTestSource(t, newChunkedReader("helllo", "\x7f\x7f", "o\r"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want a submitted message")
+	}
+	if msg != "hello" {
+		t.Errorf("msg = %q, want %q", msg, "hello")
+	}
+}
+
+func TestNextMessage_EnterOnEmptyBufferDoesNotSubmit(t *testing.T) {
+	rd := newTestSource(t, newChunkedReader("\r", "\r", "hi\r"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want a submitted message")
+	}
+	if msg != "hi" {
+		t.Errorf("msg = %q, want %q: bare Enter presses should be ignored, not submitted", msg, "hi")
+	}
+}
+
 func TestNextMessage_ExitAndQuitEndSession(t *testing.T) {
 	for _, line := range []string{"/exit", "/quit"} {
 		t.Run(line, func(t *testing.T) {
-			r := bufio.NewReader(strings.NewReader(line + "\n"))
+			rd := newTestSource(t, newChunkedReader(line, "\r"))
 
-			msg, quit, err := nextMessage(r)
+			msg, quit, err := nextMessage(rd, io.Discard)
 			if err != nil {
 				t.Fatalf("nextMessage returned error: %v", err)
 			}
 			if !quit {
-				t.Fatalf("quit = false, want true for a literal %q line", line)
+				t.Fatalf("quit = false, want true for a literal %q message", line)
 			}
 			if msg != "" {
 				t.Errorf("msg = %q, want empty on session end", msg)
@@ -60,25 +271,40 @@ func TestNextMessage_ExitAndQuitEndSession(t *testing.T) {
 	}
 }
 
-func TestNextMessage_ExitMidMessageAbandonsAccumulatedLines(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("some partial input\n/exit\n"))
+func TestNextMessage_CtrlCEndsSessionAbandoningPartialInput(t *testing.T) {
+	rd := newTestSource(t, newChunkedReader("some partial input", "\x03"))
 
-	msg, quit, err := nextMessage(r)
+	msg, quit, err := nextMessage(rd, io.Discard)
 	if err != nil {
 		t.Fatalf("nextMessage returned error: %v", err)
 	}
 	if !quit {
-		t.Fatal("quit = false, want true when /exit appears mid-message")
+		t.Fatal("quit = false, want true on Ctrl+C")
 	}
 	if msg != "" {
-		t.Errorf("msg = %q, want empty: /exit should abandon prior accumulated lines", msg)
+		t.Errorf("msg = %q, want empty: Ctrl+C should abandon partial input", msg)
+	}
+}
+
+func TestNextMessage_CtrlDEndsSession(t *testing.T) {
+	rd := newTestSource(t, newChunkedReader("\x04"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if !quit {
+		t.Fatal("quit = false, want true on Ctrl+D")
+	}
+	if msg != "" {
+		t.Errorf("msg = %q, want empty", msg)
 	}
 }
 
 func TestNextMessage_EOFWithNoInputEndsSession(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader(""))
+	rd := newTestSource(t, newChunkedReader())
 
-	msg, quit, err := nextMessage(r)
+	msg, quit, err := nextMessage(rd, io.Discard)
 	if err != nil {
 		t.Fatalf("nextMessage returned error: %v", err)
 	}
@@ -91,11 +317,9 @@ func TestNextMessage_EOFWithNoInputEndsSession(t *testing.T) {
 }
 
 func TestNextMessage_EOFAfterPartialInputEndsSessionWithoutSubmitting(t *testing.T) {
-	// No trailing blank line before EOF: the message was never terminated,
-	// so per the Ctrl+D-ends-session contract it must not be submitted.
-	r := bufio.NewReader(strings.NewReader("unterminated line"))
+	rd := newTestSource(t, newChunkedReader("unterminated input"))
 
-	msg, quit, err := nextMessage(r)
+	msg, quit, err := nextMessage(rd, io.Discard)
 	if err != nil {
 		t.Fatalf("nextMessage returned error: %v", err)
 	}
@@ -107,26 +331,29 @@ func TestNextMessage_EOFAfterPartialInputEndsSessionWithoutSubmitting(t *testing
 	}
 }
 
-func TestNextMessage_LeadingBlankLinesAreIgnored(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("\n\nreal message\n\n"))
+func TestNextMessage_GenuineReadErrorIsPropagatedNotSwallowed(t *testing.T) {
+	rd := newTestSource(t, &failingReader{data: []byte("partial")})
 
-	msg, quit, err := nextMessage(r)
-	if err != nil {
-		t.Fatalf("nextMessage returned error: %v", err)
-	}
-	if quit {
-		t.Fatal("nextMessage reported quit, want a submitted message")
-	}
-	if msg != "real message" {
-		t.Errorf("msg = %q, want %q", msg, "real message")
+	_, _, err := nextMessage(rd, io.Discard)
+	if !errors.Is(err, errFailingRead) {
+		t.Fatalf("err = %v, want it to wrap %v: a genuine read error must not be treated the same as a clean EOF", err, errFailingRead)
 	}
 }
 
-func TestNextMessage_GenuineReadErrorIsPropagatedNotSwallowed(t *testing.T) {
-	r := bufio.NewReader(&failingReader{data: []byte("partial line")})
+func TestNextMessage_EchoesTypedTextNewlinesAndBackspace(t *testing.T) {
+	rd := newTestSource(t, newChunkedReader("hix", "\x7f", "\x1b[13;2u", "y", "\r"))
 
-	_, _, err := nextMessage(r)
-	if !errors.Is(err, errFailingRead) {
-		t.Fatalf("err = %v, want it to wrap %v: a genuine read error must not be treated the same as a clean EOF", err, errFailingRead)
+	var echo bytes.Buffer
+	msg, _, err := nextMessage(rd, &echo)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if msg != "hi\ny" {
+		t.Fatalf("msg = %q, want %q", msg, "hi\ny")
+	}
+
+	want := "hix" + "\b \b" + "\r\n" + "y" + "\r\n"
+	if echo.String() != want {
+		t.Errorf("echo = %q, want %q", echo.String(), want)
 	}
 }

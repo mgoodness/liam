@@ -33,6 +33,9 @@ func main() {
 	auth := provider.NewAuthenticator()
 	p := provider.NewCopilot(auth, *model, tool.Definitions(tools))
 
+	restore := enableTUIInput(os.Stdin, os.Stdout)
+	defer restore()
+
 	runSession(context.Background(), os.Stdin, os.Stdout, os.Stderr, p, tools, buildSystemPrompt(os.Stderr))
 }
 
