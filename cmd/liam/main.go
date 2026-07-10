@@ -7,6 +7,8 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"io"
 	"os"
 	"sort"
 
@@ -29,7 +31,31 @@ func main() {
 	auth := provider.NewAuthenticator()
 	p := provider.NewCopilot(auth, *model, toolDefinitions())
 
-	runSession(context.Background(), os.Stdin, os.Stdout, os.Stderr, p, systemPrompt)
+	runSession(context.Background(), os.Stdin, os.Stdout, os.Stderr, p, fullSystemPrompt(os.Stderr))
+}
+
+// fullSystemPrompt returns liam's base systemPrompt with any discovered
+// AGENTS.md content appended (see loadAgentsMD). Failures resolving the
+// current directory or the global AGENTS.md path are non-fatal: liam
+// starts with the base prompt and a warning on errOut rather than
+// refusing to run.
+func fullSystemPrompt(errOut io.Writer) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(errOut, "warning: getwd:", err)
+		return systemPrompt
+	}
+
+	agentsMD, err := loadAgentsMD(cwd, errOut)
+	if err != nil {
+		fmt.Fprintln(errOut, "warning: loading AGENTS.md:", err)
+		return systemPrompt
+	}
+	if agentsMD == "" {
+		return systemPrompt
+	}
+
+	return systemPrompt + "\n\n" + agentsMD
 }
 
 // toolDefinitions returns the v1 tool set's Definitions in a stable
