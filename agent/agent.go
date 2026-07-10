@@ -14,11 +14,13 @@ import (
 )
 
 // Run drives the agent loop against p, starting from history and executing
-// tool calls via the tool package's dispatch table (tool.Call). It returns
-// the final assistant text once a response contains no tool calls, along
-// with the full updated history (including every appended assistant and
-// tool-result message) so the caller can continue the conversation.
-func Run(ctx context.Context, p provider.Provider, history []provider.Message) (string, []provider.Message, error) {
+// tool calls via tool.Call against tools — the same set (typically built
+// by tool.New) whose Definitions were offered to p, so every name p can
+// request resolves here. It returns the final assistant text once a
+// response contains no tool calls, along with the full updated history
+// (including every appended assistant and tool-result message) so the
+// caller can continue the conversation.
+func Run(ctx context.Context, p provider.Provider, tools map[string]tool.Tool, history []provider.Message) (string, []provider.Message, error) {
 	// Own copy: append below must never write into spare capacity of the
 	// caller's backing array, which would mutate their slice out from
 	// under them.
@@ -40,7 +42,7 @@ func Run(ctx context.Context, p provider.Provider, history []provider.Message) (
 		}
 
 		for _, call := range resp.ToolCalls {
-			result, err := tool.Call(ctx, call.Name, call.Arguments)
+			result, err := tool.Call(ctx, tools, call.Name, call.Arguments)
 			if errors.Is(err, tool.ErrUnknownTool) {
 				return "", history, err
 			}

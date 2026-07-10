@@ -10,6 +10,7 @@ import (
 
 	"github.com/mgoodness/liam/agent"
 	"github.com/mgoodness/liam/provider"
+	"github.com/mgoodness/liam/tool"
 )
 
 // fakeProvider returns a scripted sequence of Responses, one per call to
@@ -38,7 +39,7 @@ func TestRun_NoToolCalls_ReturnsFinalText(t *testing.T) {
 		{Role: provider.RoleUser, Content: "hi"},
 	}
 
-	text, updated, err := agent.Run(context.Background(), p, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestRun_ExecutesToolCallAndContinuesUntilNoToolCalls(t *testing.T) {
 		{Role: provider.RoleUser, Content: "write a greeting file"},
 	}
 
-	text, updated, err := agent.Run(context.Background(), p, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestRun_CombinesTextAndToolCallsIntoOneMessage(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "write a file"}}
 
-	if _, updated, err := agent.Run(context.Background(), p, history); err != nil {
+	if _, updated, err := agent.Run(context.Background(), p, tool.Tools, history); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	} else {
 		msg := updated[1]
@@ -172,7 +173,7 @@ func TestRun_ExecutesToolCallsSequentiallyInOrder(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "write then edit"}}
 
-	if _, updated, err := agent.Run(context.Background(), p, history); err != nil {
+	if _, updated, err := agent.Run(context.Background(), p, tool.Tools, history); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	} else {
 		writeResult := updated[2]
@@ -210,7 +211,7 @@ func TestRun_FailingToolCallFeedsErrorBackAndContinues(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "read a missing file"}}
 
-	text, updated, err := agent.Run(context.Background(), p, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
 	if err != nil {
 		t.Fatalf("Run should not abort on a failing tool call, got error: %v", err)
 	}
@@ -250,7 +251,7 @@ func TestRun_MultipleRoundsOfToolCallsBeforeTerminating(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "write two files"}}
 
-	text, updated, err := agent.Run(context.Background(), p, history)
+	text, updated, err := agent.Run(context.Background(), p, tool.Tools, history)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestRun_UnknownToolNameReturnsError(t *testing.T) {
 	}
 	history := []provider.Message{{Role: provider.RoleUser, Content: "do something"}}
 
-	if _, _, err := agent.Run(context.Background(), p, history); err == nil {
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, history); err == nil {
 		t.Fatal("expected an error when the Provider requests a tool name outside the dispatch table, per tool.Call's contract that this is a bug, not a soft failure")
 	}
 }
@@ -291,7 +292,7 @@ func TestRun_DoesNotAliasCallersHistoryBackingArray(t *testing.T) {
 	backing[0] = provider.Message{Role: provider.RoleUser, Content: "hi"}
 
 	p := &fakeProvider{responses: []provider.Response{{Text: "hello"}}}
-	if _, _, err := agent.Run(context.Background(), p, backing); err != nil {
+	if _, _, err := agent.Run(context.Background(), p, tool.Tools, backing); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 

@@ -8,13 +8,16 @@ import (
 
 	"github.com/mgoodness/liam/agent"
 	"github.com/mgoodness/liam/provider"
+	"github.com/mgoodness/liam/tool"
 )
 
 // runSession drives the REPL: prompt, read a submitted message, run it
 // through the agent loop against p, print the result, and repeat until the
-// session ends (EOF, /exit, or /quit). A non-auth error mid-turn is printed
-// to errOut and the loop continues rather than returning.
-func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p provider.Provider, systemPrompt string) {
+// session ends (EOF, /exit, or /quit). tools is passed through to every
+// agent.Run call, so it must be the same set whose Definitions were given
+// to p. A non-auth error mid-turn is printed to errOut and the loop
+// continues rather than returning.
+func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p provider.Provider, tools map[string]tool.Tool, systemPrompt string) {
 	r := bufio.NewReader(in)
 	history := []provider.Message{{Role: provider.RoleSystem, Content: systemPrompt}}
 
@@ -32,7 +35,7 @@ func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p prov
 
 		history = append(history, provider.Message{Role: provider.RoleUser, Content: msg})
 
-		text, updated, err := agent.Run(ctx, p, history)
+		text, updated, err := agent.Run(ctx, p, tools, history)
 		history = updated
 		if err != nil {
 			fmt.Fprintln(errOut, "error:", err)

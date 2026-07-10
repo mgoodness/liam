@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mgoodness/liam/provider"
+	"github.com/mgoodness/liam/tool"
 )
 
 // fakeProvider returns a scripted sequence of Responses, one per call to
@@ -36,7 +37,7 @@ func TestRunSession_SubmittedMessageDrivesAgentLoopAndPrintsResult(t *testing.T)
 	var out bytes.Buffer
 	p := &fakeProvider{responses: []provider.Response{{Text: "hello back"}}}
 
-	runSession(context.Background(), in, &out, &out, p, "you are liam")
+	runSession(context.Background(), in, &out, &out, p, tool.Tools, "you are liam")
 
 	if !strings.Contains(out.String(), "hello back") {
 		t.Errorf("output = %q, want it to contain the final assistant text", out.String())
@@ -51,7 +52,7 @@ func TestRunSession_MidTurnErrorIsPrintedAndSessionContinues(t *testing.T) {
 		responses: []provider.Response{{}, {Text: "recovered"}},
 	}
 
-	runSession(context.Background(), in, &out, &errOut, p, "you are liam")
+	runSession(context.Background(), in, &out, &errOut, p, tool.Tools, "you are liam")
 
 	if !strings.Contains(errOut.String(), "network failure") {
 		t.Errorf("errOut = %q, want it to contain the mid-turn error", errOut.String())

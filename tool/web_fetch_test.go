@@ -119,7 +119,7 @@ func TestWebFetch_ResultIsTruncatedByCall(t *testing.T) {
 		t.Fatalf("marshaling args: %v", err)
 	}
 
-	got, err := Call(context.Background(), "web_fetch", raw)
+	got, err := Call(context.Background(), Tools, "web_fetch", raw)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
