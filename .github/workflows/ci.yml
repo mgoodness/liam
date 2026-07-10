@@ -11,6 +11,10 @@ permissions:
 
 jobs:
   test:
+    # release-please's own release PRs (branch "release-please--branches--...")
+    # only touch the manifest and CHANGELOG.md — no Go source to test, and
+    # they're already covered by the CI run on main that produced them.
+    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
