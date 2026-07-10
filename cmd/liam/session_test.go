@@ -81,7 +81,7 @@ func TestRunSession_PrintsProgressForIntermediateTextAndToolCalls(t *testing.T) 
 		},
 	}
 
-	runSession(context.Background(), in, &out, &out, p, "you are liam")
+	runSession(context.Background(), in, &out, &out, p, tool.Tools, "you are liam")
 	got := out.String()
 
 	if !strings.Contains(got, "working on it") {
