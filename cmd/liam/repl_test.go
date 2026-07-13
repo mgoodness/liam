@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/input"
 
@@ -463,6 +465,123 @@ func TestResolveSkillCommand_EmptySkillSetIsNotOK(t *testing.T) {
 	_, _, ok := resolveSkillCommand(nil, "/pdf-processing")
 	if ok {
 		t.Fatal("ok = true, want false when no skills were discovered at all")
+	}
+}
+
+func TestHandoff_DrainsReplayBeforeChannel(t *testing.T) {
+	ch := make(chan eventOrErr, 1)
+	ch <- eventOrErr{ev: input.KeyPressEvent{Text: "b"}}
+
+	h := &handoff{
+		ch:     ch,
+		replay: []eventOrErr{{ev: input.KeyPressEvent{Text: "a"}}},
+	}
+
+	ev, err := h.next()
+	if err != nil {
+		t.Fatalf("first next: %v", err)
+	}
+	if key, ok := ev.(input.KeyPressEvent); !ok || key.Text != "a" {
+		t.Fatalf("first next = %#v, want the replayed event ahead of the channel", ev)
+	}
+
+	ev, err = h.next()
+	if err != nil {
+		t.Fatalf("second next: %v", err)
+	}
+	if key, ok := ev.(input.KeyPressEvent); !ok || key.Text != "b" {
+		t.Fatalf("second next = %#v, want the channel event once replay is drained", ev)
+	}
+}
+
+// waitForLeftover waits for watchForCtrlC's result, failing the test if it
+// doesn't return promptly.
+func waitForLeftover(t *testing.T, resultCh <-chan []eventOrErr) []eventOrErr {
+	t.Helper()
+	select {
+	case leftover := <-resultCh:
+		return leftover
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchForCtrlC did not return promptly")
+		return nil
+	}
+}
+
+func TestWatchForCtrlC_CancelsAndReturnsLeftoverOnCtrlC(t *testing.T) {
+	ch := make(chan eventOrErr)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	resultCh := make(chan []eventOrErr, 1)
+	go func() {
+		resultCh <- watchForCtrlC(ch, cancel, done)
+	}()
+
+	ch <- eventOrErr{ev: input.KeyPressEvent{Text: "x"}}
+	ch <- eventOrErr{ev: input.KeyPressEvent{Text: "y"}}
+	ch <- eventOrErr{ev: input.KeyPressEvent{Mod: input.ModCtrl, Code: 'c'}}
+
+	leftover := waitForLeftover(t, resultCh)
+
+	if ctx.Err() == nil {
+		t.Error("ctx.Err() = nil, want the turn's context cancelled after seeing Ctrl+C")
+	}
+	if len(leftover) != 2 {
+		t.Fatalf("leftover = %#v, want exactly the 2 non-Ctrl+C events read before Ctrl+C", leftover)
+	}
+	if key, ok := leftover[0].ev.(input.KeyPressEvent); !ok || key.Text != "x" {
+		t.Errorf("leftover[0] = %#v, want %q", leftover[0], "x")
+	}
+	if key, ok := leftover[1].ev.(input.KeyPressEvent); !ok || key.Text != "y" {
+		t.Errorf("leftover[1] = %#v, want %q", leftover[1], "y")
+	}
+}
+
+func TestWatchForCtrlC_StopsOnDoneWithoutCancelling(t *testing.T) {
+	ch := make(chan eventOrErr)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	resultCh := make(chan []eventOrErr, 1)
+	go func() {
+		resultCh <- watchForCtrlC(ch, cancel, done)
+	}()
+
+	ch <- eventOrErr{ev: input.KeyPressEvent{Text: "z"}}
+	close(done)
+
+	leftover := waitForLeftover(t, resultCh)
+
+	if ctx.Err() != nil {
+		t.Error("ctx.Err() != nil, want the turn's context untouched when the turn ends without Ctrl+C")
+	}
+	if len(leftover) != 1 {
+		t.Fatalf("leftover = %#v, want the 1 event read before done closed", leftover)
+	}
+	if key, ok := leftover[0].ev.(input.KeyPressEvent); !ok || key.Text != "z" {
+		t.Errorf("leftover[0] = %#v, want %q", leftover[0], "z")
+	}
+}
+
+func TestWatchForCtrlC_TerminalErrorEndsWatchAndIsReturnedAsLeftover(t *testing.T) {
+	ch := make(chan eventOrErr)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	resultCh := make(chan []eventOrErr, 1)
+	go func() {
+		resultCh <- watchForCtrlC(ch, cancel, done)
+	}()
+
+	ch <- eventOrErr{err: io.EOF}
+
+	leftover := waitForLeftover(t, resultCh)
+
+	if ctx.Err() != nil {
+		t.Error("ctx.Err() != nil, want a terminal read error left uncancelled: it's not a Ctrl+C")
+	}
+	if len(leftover) != 1 || !errors.Is(leftover[0].err, io.EOF) {
+		t.Fatalf("leftover = %#v, want it to carry the terminal error so the handoff can surface it later", leftover)
 	}
 }
 

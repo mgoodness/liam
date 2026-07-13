@@ -60,6 +60,39 @@ func TestBash_DefaultTimeoutKillsCommand(t *testing.T) {
 	}
 }
 
+func TestBash_CancelledContextKillsCommand(t *testing.T) {
+	// Confirms runBash's tool-level cancellation end-to-end (issue #35):
+	// it already derives its execution context via exec.CommandContext, so
+	// a context cancelled directly — not via its own timeout — should kill
+	// the subprocess just as reliably. Unlike the timeout case, runBash
+	// doesn't special-case a directly cancelled context: cmd.Run returns an
+	// *exec.ExitError for the signal-killed shell, which runBash reports as
+	// an ordinary (if unsuccessful) result rather than a Go error — this
+	// only confirms the marker never gets created, i.e. the shell was
+	// killed before reaching the "touch" half of the command, the same way
+	// TestBash_DefaultTimeoutKillsCommand confirms it for a timeout.
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+
+	args, err := json.Marshal(map[string]any{"command": "sleep 2 && touch " + marker})
+	if err != nil {
+		t.Fatalf("marshaling args: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	if _, err := runBash(ctx, args, DefaultTimeout); err != nil {
+		t.Fatalf("runBash: %v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("command should have been killed before creating marker")
+	}
+}
+
 func TestBash_PerCallTimeoutOverride(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -21,6 +22,16 @@ import (
 // agent.Run call, so it must be the same set whose Definitions were given
 // to p. A non-auth error mid-turn is printed to errOut and the loop
 // continues rather than returning.
+//
+// Each turn gets its own cancelable context, derived fresh from ctx rather
+// than reusing one long-lived context across every turn, so cancelling one
+// turn can't affect the next. While agent.Run is in flight, a concurrent
+// watchForCtrlC call watches src for a Ctrl+C key event and cancels that
+// turn's context the instant it sees one; runSession then recognizes the
+// resulting context.Canceled error and returns quietly to the prompt
+// instead of printing it to errOut like a genuine failure — see ADR 0007.
+// Ctrl+C between turns, while nextMessage itself is waiting at the prompt,
+// is unaffected and continues to end the session exactly as before.
 //
 // A submitted message that resolves against skills as a /name invocation
 // (see resolveSkillCommand) loads that skill's full SKILL.md body via the
@@ -43,6 +54,10 @@ func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p prov
 	defer rd.Close()
 	src := newEventSource(rd)
 
+	ch := make(chan eventOrErr)
+	go pump(src, ch)
+	h := &handoff{ch: ch}
+
 	history := []provider.Message{{Role: provider.RoleSystem, Content: systemPrompt}}
 
 	cb := agent.Callbacks{
@@ -60,7 +75,7 @@ func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p prov
 	for {
 		fmt.Fprint(out, "> ")
 
-		msg, quit, err := nextMessage(src, out)
+		msg, quit, err := nextMessage(h, out)
 		if err != nil {
 			writeLine(errOut, "error reading input:", err)
 			return
@@ -84,10 +99,24 @@ func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p prov
 
 		history = append(history, provider.Message{Role: provider.RoleUser, Content: msg})
 
-		_, updated, err := agent.Run(ctx, p, tools, history, cb)
+		turnCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		watchDone := make(chan []eventOrErr, 1)
+		go func() {
+			watchDone <- watchForCtrlC(ch, cancel, done)
+		}()
+
+		_, updated, runErr := agent.Run(turnCtx, p, tools, history, cb)
+		close(done)
+		h.replay = append(h.replay, <-watchDone...)
+		cancel()
+
 		history = updated
-		if err != nil {
-			writeLine(errOut, "error:", err)
+		if runErr != nil {
+			if errors.Is(runErr, context.Canceled) {
+				continue
+			}
+			writeLine(errOut, "error:", runErr)
 			continue
 		}
 	}
