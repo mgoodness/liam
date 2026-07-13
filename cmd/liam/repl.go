@@ -4,9 +4,12 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/input"
+
+	"github.com/mgoodness/liam/skill"
 )
 
 // eventSource pulls one input event at a time out of rd. A single
@@ -136,4 +139,38 @@ func nextMessage(src *eventSource, echo io.Writer) (msg string, quit bool, err e
 			io.WriteString(echo, key.Text)
 		}
 	}
+}
+
+// resolveSkillCommand parses msg as an explicit /name invocation (optionally
+// followed by trailing text) and resolves name against skills — the full
+// discovered set from skill.Discover, not the model-facing index skill.Index
+// renders, so a disable-model-invocation skill remains resolvable here even
+// though it's excluded from the system prompt (see ADR 0003). The name ends
+// at the first run of whitespace — including a newline, since nextMessage
+// lets a submitted message span multiple lines (Shift+Enter, Ctrl+J) — and
+// everything after it is trailing text, returned unchanged with no
+// positional-argument substitution.
+//
+// ok is false when msg doesn't start with "/" or names no discovered skill;
+// the caller should then treat msg as an ordinary message rather than a
+// skill invocation, which is what keeps an unmatched name from crashing the
+// session.
+func resolveSkillCommand(skills []skill.Skill, msg string) (matched skill.Skill, text string, ok bool) {
+	rest, isSlash := strings.CutPrefix(msg, "/")
+	if !isSlash {
+		return skill.Skill{}, "", false
+	}
+
+	name := rest
+	var trailing string
+	if i := strings.IndexFunc(rest, unicode.IsSpace); i >= 0 {
+		name, trailing = rest[:i], rest[i+1:]
+	}
+
+	for _, s := range skills {
+		if s.Name == name {
+			return s, strings.TrimSpace(trailing), true
+		}
+	}
+	return skill.Skill{}, "", false
 }

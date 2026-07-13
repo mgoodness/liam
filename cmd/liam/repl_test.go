@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/input"
+
+	"github.com/mgoodness/liam/skill"
 )
 
 // chunkedReader delivers a fixed sequence of byte chunks, one per Read
@@ -337,6 +339,95 @@ func TestNextMessage_GenuineReadErrorIsPropagatedNotSwallowed(t *testing.T) {
 	_, _, err := nextMessage(rd, io.Discard)
 	if !errors.Is(err, errFailingRead) {
 		t.Fatalf("err = %v, want it to wrap %v: a genuine read error must not be treated the same as a clean EOF", err, errFailingRead)
+	}
+}
+
+func TestResolveSkillCommand_MatchesDiscoveredSkillWithNoTrailingText(t *testing.T) {
+	skills := []skill.Skill{
+		{Name: "pdf-processing", Path: "/skills/pdf-processing"},
+	}
+
+	got, text, ok := resolveSkillCommand(skills, "/pdf-processing")
+	if !ok {
+		t.Fatal("ok = false, want true for a name matching a discovered skill")
+	}
+	if got.Name != "pdf-processing" {
+		t.Errorf("matched = %+v, want the pdf-processing skill", got)
+	}
+	if text != "" {
+		t.Errorf("text = %q, want empty when nothing follows the name", text)
+	}
+}
+
+func TestResolveSkillCommand_PassesTrailingTextThroughUnchanged(t *testing.T) {
+	skills := []skill.Skill{{Name: "pdf-processing", Path: "/skills/pdf-processing"}}
+
+	got, text, ok := resolveSkillCommand(skills, "/pdf-processing summarize report.pdf $1")
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if got.Name != "pdf-processing" {
+		t.Errorf("matched = %+v, want the pdf-processing skill", got)
+	}
+	if want := "summarize report.pdf $1"; text != want {
+		t.Errorf("text = %q, want %q verbatim: no positional-argument substitution", text, want)
+	}
+}
+
+func TestResolveSkillCommand_MultiLineTrailingTextStillResolves(t *testing.T) {
+	// nextMessage lets a submitted message span multiple lines (Shift+Enter,
+	// Ctrl+J), so the name must end at the first newline too, not just a
+	// space, or a multi-line invocation would silently fail to resolve.
+	skills := []skill.Skill{{Name: "pdf-processing", Path: "/skills/pdf-processing"}}
+
+	got, text, ok := resolveSkillCommand(skills, "/pdf-processing\nsummarize this\nacross two lines")
+	if !ok {
+		t.Fatal("ok = false, want true: a newline after the name must still resolve it")
+	}
+	if got.Name != "pdf-processing" {
+		t.Errorf("matched = %+v, want the pdf-processing skill", got)
+	}
+	if want := "summarize this\nacross two lines"; text != want {
+		t.Errorf("text = %q, want %q", text, want)
+	}
+}
+
+func TestResolveSkillCommand_DisableModelInvocationSkillStillResolves(t *testing.T) {
+	skills := []skill.Skill{
+		{Name: "internal-only", Path: "/skills/internal-only", DisableModelInvocation: true},
+	}
+
+	got, _, ok := resolveSkillCommand(skills, "/internal-only")
+	if !ok {
+		t.Fatal("ok = false, want true: disable-model-invocation must not block explicit /name invocation")
+	}
+	if got.Name != "internal-only" {
+		t.Errorf("matched = %+v, want the internal-only skill", got)
+	}
+}
+
+func TestResolveSkillCommand_UnknownNameIsNotOK(t *testing.T) {
+	skills := []skill.Skill{{Name: "pdf-processing", Path: "/skills/pdf-processing"}}
+
+	_, _, ok := resolveSkillCommand(skills, "/no-such-skill")
+	if ok {
+		t.Fatal("ok = true, want false: no discovered skill named no-such-skill")
+	}
+}
+
+func TestResolveSkillCommand_NonSlashMessageIsNotOK(t *testing.T) {
+	skills := []skill.Skill{{Name: "pdf-processing", Path: "/skills/pdf-processing"}}
+
+	_, _, ok := resolveSkillCommand(skills, "pdf-processing")
+	if ok {
+		t.Fatal("ok = true, want false: a message with no leading / is never a skill invocation")
+	}
+}
+
+func TestResolveSkillCommand_EmptySkillSetIsNotOK(t *testing.T) {
+	_, _, ok := resolveSkillCommand(nil, "/pdf-processing")
+	if ok {
+		t.Fatal("ok = true, want false when no skills were discovered at all")
 	}
 }
 

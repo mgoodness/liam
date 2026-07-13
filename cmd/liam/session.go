@@ -11,6 +11,7 @@ import (
 
 	"github.com/mgoodness/liam/agent"
 	"github.com/mgoodness/liam/provider"
+	"github.com/mgoodness/liam/skill"
 	"github.com/mgoodness/liam/tool"
 )
 
@@ -21,11 +22,19 @@ import (
 // to p. A non-auth error mid-turn is printed to errOut and the loop
 // continues rather than returning.
 //
+// A submitted message that resolves against skills as a /name invocation
+// (see resolveSkillCommand) loads that skill's full SKILL.md body via the
+// existing read tool before the turn runs, rather than being sent to the
+// model as literal text — see ADR 0003. skills is the full discovered set,
+// including disable-model-invocation skills, which remain explicitly
+// invocable even though they're absent from systemPrompt's model-facing
+// index.
+//
 // The agent loop's progress — intermediate assistant text and each tool
 // call's summary and result — is printed to out via agent.Callbacks as it
 // happens, via writeLine so it renders correctly under raw mode (see
 // terminal.go and ADR 0006).
-func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p provider.Provider, tools map[string]tool.Tool, systemPrompt string) {
+func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p provider.Provider, tools map[string]tool.Tool, systemPrompt string, skills []skill.Skill) {
 	rd, err := input.NewReader(in, "", 0)
 	if err != nil {
 		writeLine(errOut, "error initializing input reader:", err)
@@ -60,6 +69,19 @@ func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p prov
 			return
 		}
 
+		if s, text, ok := resolveSkillCommand(skills, msg); ok {
+			body, err := loadSkillBody(ctx, tools, s)
+			if err != nil {
+				writeLine(errOut, "error loading skill", s.Name+":", err)
+				continue
+			}
+			writeLine(out, "-> skill:", s.Name)
+			msg = body
+			if text != "" {
+				msg += "\n\n" + text
+			}
+		}
+
 		history = append(history, provider.Message{Role: provider.RoleUser, Content: msg})
 
 		_, updated, err := agent.Run(ctx, p, tools, history, cb)
@@ -69,6 +91,18 @@ func runSession(ctx context.Context, in io.Reader, out, errOut io.Writer, p prov
 			continue
 		}
 	}
+}
+
+// loadSkillBody loads s's full SKILL.md body via the existing read tool
+// (see ADR 0003) rather than a dedicated skill-loading mechanism, the same
+// way the model itself loads a skill it discovers via the system prompt
+// index.
+func loadSkillBody(ctx context.Context, tools map[string]tool.Tool, s skill.Skill) (string, error) {
+	args, err := json.Marshal(map[string]string{"path": s.SkillMDPath()})
+	if err != nil {
+		return "", err
+	}
+	return tool.Call(ctx, tools, "read", args)
 }
 
 // summarizeToolCall renders a one-line, human-readable description of a
