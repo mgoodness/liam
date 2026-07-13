@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mgoodness/liam/provider"
 	"github.com/mgoodness/liam/skill"
@@ -161,5 +163,111 @@ func TestRunSession_UnmatchedSlashNameIsSentThroughAsOrdinaryMessage(t *testing.
 	sent := p.lastMessages[len(p.lastMessages)-1]
 	if sent.Content != "/no-such-skill" {
 		t.Errorf("sent content = %q, want the literal unmatched text passed through unchanged", sent.Content)
+	}
+}
+
+// gatedReader delivers first on its first Read, then blocks until release
+// is closed before delivering rest — letting a test hold back Ctrl+C bytes
+// until a turn it's meant to interrupt is confirmed actually in flight,
+// rather than racing nextMessage's own initial read.
+type gatedReader struct {
+	first   []byte
+	rest    []byte
+	release <-chan struct{}
+	stage   int
+}
+
+func (g *gatedReader) Read(p []byte) (int, error) {
+	switch g.stage {
+	case 0:
+		g.stage = 1
+		return copy(p, g.first), nil
+	case 1:
+		<-g.release
+		g.stage = 2
+		if len(g.rest) == 0 {
+			return 0, io.EOF
+		}
+		return copy(p, g.rest), nil
+	default:
+		return 0, io.EOF
+	}
+}
+
+// blockingThenScriptedProvider's first Complete call blocks until ctx is
+// cancelled and returns ctx.Err(), simulating a turn a user Ctrl+C's out
+// of; started, if non-nil, closes once that first call is underway, so a
+// test can wait for the blocking call to truly be in flight before sending
+// Ctrl+C. Every call after the first returns the next scripted response in
+// sequence instead of blocking.
+type blockingThenScriptedProvider struct {
+	started      chan struct{}
+	responses    []provider.Response
+	calls        int
+	lastMessages []provider.Message
+}
+
+func (b *blockingThenScriptedProvider) Complete(ctx context.Context, messages []provider.Message) (provider.Response, error) {
+	b.lastMessages = messages
+	if b.calls == 0 {
+		b.calls++
+		if b.started != nil {
+			close(b.started)
+		}
+		<-ctx.Done()
+		return provider.Response{}, ctx.Err()
+	}
+	i := b.calls - 1
+	b.calls++
+	return b.responses[i], nil
+}
+
+func TestRunSession_CtrlCCancelsInFlightTurnAndPreservesBufferedInput(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	in := &gatedReader{
+		first:   []byte("do it\r"),
+		rest:    []byte("queued\x03\r/exit\r"),
+		release: release,
+	}
+
+	p := &blockingThenScriptedProvider{
+		started:   started,
+		responses: []provider.Response{{Text: "handled queued input"}},
+	}
+
+	var out, errOut bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		runSession(context.Background(), in, &out, &errOut, p, tool.Tools, "you are liam", nil)
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider.Complete was never called: the turn never started")
+	}
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSession did not return: /exit was never reached after the cancelled turn")
+	}
+
+	if errOut.Len() != 0 {
+		t.Errorf("errOut = %q, want empty: a cancelled turn must return quietly, not print an error", errOut.String())
+	}
+	if len(p.responses) != p.calls-1 {
+		t.Fatalf("provider.Complete called %d times, want %d", p.calls, len(p.responses)+1)
+	}
+
+	sent := p.lastMessages[len(p.lastMessages)-1]
+	if sent.Content != "queued" {
+		t.Errorf("sent content = %q, want %q: input typed while the turn was in flight, ahead of Ctrl+C, must resume as the next message rather than being dropped", sent.Content, "queued")
+	}
+	if !strings.Contains(out.String(), "handled queued input") {
+		t.Errorf("out = %q, want it to contain the response to the resumed turn", out.String())
 	}
 }

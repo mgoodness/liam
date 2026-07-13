@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -40,6 +41,101 @@ func (s *eventSource) next() (input.Event, error) {
 	return ev, nil
 }
 
+// eventReader is anything nextMessage can pull one input event at a time
+// from — an *eventSource directly (used between turns before a turn's
+// concurrent watcher exists, and throughout in tests), or a *handoff (used
+// by runSession, layering the mid-turn Ctrl+C watcher on top).
+type eventReader interface {
+	next() (input.Event, error)
+}
+
+// eventOrErr carries one eventSource.next result — an event or a terminal
+// read error — so pump can hand either off over a single channel.
+type eventOrErr struct {
+	ev  input.Event
+	err error
+}
+
+// pump is the sole goroutine that ever calls src.next: the underlying
+// input.Reader's blocking read isn't safe for concurrent use, so every
+// consumer — nextMessage between turns, watchForCtrlC while a turn is in
+// flight — reads from ch instead of touching src directly, and ownership of
+// "who's draining ch right now" simply moves between them without either
+// ever racing the actual read. pump runs for the life of the session,
+// stopping once src.next returns any error (a clean EOF or a genuine read
+// failure alike) — that error is sent to ch like any other result, so
+// whichever consumer is reading at the time still sees it rather than
+// hanging forever waiting for input that will never come.
+func pump(src *eventSource, ch chan<- eventOrErr) {
+	for {
+		ev, err := src.next()
+		ch <- eventOrErr{ev, err}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// handoff is nextMessage's view of pump's channel between turns: it first
+// replays, in order, whatever a mid-turn watchForCtrlC call read off ch but
+// didn't act on — keystrokes typed while a turn was in flight, or even the
+// terminal error that ends the session — before pulling anything fresh off
+// ch itself. This is what keeps an event from being silently dropped at the
+// boundary between a turn ending and the next nextMessage call beginning.
+type handoff struct {
+	ch     <-chan eventOrErr
+	replay []eventOrErr
+}
+
+func (h *handoff) next() (input.Event, error) {
+	if len(h.replay) > 0 {
+		item := h.replay[0]
+		h.replay = h.replay[1:]
+		return item.ev, item.err
+	}
+	item := <-h.ch
+	return item.ev, item.err
+}
+
+// isCtrlC reports whether key is the Ctrl+C combination — the one event
+// both nextMessage (ending the session when idle at the prompt) and
+// watchForCtrlC (cancelling the current turn's context when one's in
+// flight) need to recognize identically.
+func isCtrlC(key input.KeyPressEvent) bool {
+	return key.Mod.Contains(input.ModCtrl) && key.Code == 'c'
+}
+
+// watchForCtrlC reads events off ch while a turn is in flight, watching
+// specifically for Ctrl+C, and calls cancel the instant it sees one before
+// returning. It also returns as soon as done is closed, which runSession
+// does the moment the turn ends on its own (a normal response or a
+// mid-turn error) — whichever happens first, ctrl+c or done, no event still
+// left on ch is read after that point by this call.
+//
+// Any event read that isn't Ctrl+C — including the terminal error pump
+// sends when input ends — is appended to leftover in arrival order rather
+// than discarded, so runSession can splice it into the handoff for the next
+// nextMessage call to replay.
+func watchForCtrlC(ch <-chan eventOrErr, cancel context.CancelFunc, done <-chan struct{}) (leftover []eventOrErr) {
+	for {
+		select {
+		case <-done:
+			return leftover
+		case item := <-ch:
+			if item.err == nil {
+				if key, ok := item.ev.(input.KeyPressEvent); ok && isCtrlC(key) {
+					cancel()
+					return leftover
+				}
+			}
+			leftover = append(leftover, item)
+			if item.err != nil {
+				return leftover
+			}
+		}
+	}
+}
+
 // crlf is what nextMessage and writeLine (session.go) both write in place
 // of a bare "\n": raw mode disables the terminal driver's own translation
 // from "\n" to a proper carriage-return-then-newline (see terminal.go), so
@@ -73,7 +169,7 @@ const crlf = "\r\n"
 // text, newlines, and a backspace-erase sequence — so the caller can make
 // raw-mode input visible on the terminal; nextMessage performs no terminal
 // rendering itself.
-func nextMessage(src *eventSource, echo io.Writer) (msg string, quit bool, err error) {
+func nextMessage(src eventReader, echo io.Writer) (msg string, quit bool, err error) {
 	var lines []string
 	var cur strings.Builder
 
@@ -149,7 +245,7 @@ func nextMessage(src *eventSource, echo io.Writer) (msg string, quit bool, err e
 				return msg, quit, nil
 			}
 
-		case key.Mod.Contains(input.ModCtrl) && key.Code == 'c':
+		case isCtrlC(key):
 			io.WriteString(echo, crlf)
 			return "", true, nil
 
