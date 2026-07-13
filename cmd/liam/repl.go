@@ -49,10 +49,10 @@ const crlf = "\r\n"
 // nextMessage reads structured input events from src — key presses,
 // including Kitty keyboard protocol modifiers, and bracketed-paste
 // content — accumulating them into a single message. It returns quit=true,
-// with no message, when the session should end: Ctrl+C, Ctrl+D, a literal
-// /exit or /quit message, or src reaching EOF. A genuine read error
-// (anything but io.EOF) is returned as-is rather than treated as a clean
-// session end.
+// with no message, when the session should end: Ctrl+C, Ctrl+D on an empty
+// buffer, a literal /exit or /quit message, or src reaching EOF. A genuine
+// read error (anything but io.EOF) is returned as-is rather than treated as
+// a clean session end.
 //
 // Plain Enter submits the accumulated message immediately — no second
 // blank-line Enter required, replacing v0.1's blank-line-terminated
@@ -62,6 +62,12 @@ const crlf = "\r\n"
 // already typed and regardless of whether the pasted text itself ends in a
 // newline — this is what resolves the ambiguity a bufio.Reader.Buffered()
 // heuristic would have had (see ADR 0002).
+//
+// Ctrl+D matches canonical-mode/bash/Python-REPL convention (ADR 0007): it
+// only ends the session on an empty buffer. With a non-empty buffer —
+// typed characters or lines accumulated via Shift+Enter/Ctrl+J — it
+// submits instead, following the same path as Enter. Ctrl+C always ends
+// the session, abandoning whatever's been typed.
 //
 // echo receives a minimal transcript of what was typed or pasted — raw
 // text, newlines, and a backspace-erase sequence — so the caller can make
@@ -82,6 +88,22 @@ func nextMessage(src *eventSource, echo io.Writer) (msg string, quit bool, err e
 		full := strings.Join(lines, "\n")
 		lines = nil
 		return full
+	}
+
+	// trySubmit runs the same submission logic as plain Enter: a blank
+	// accumulated buffer is ignored (the loop keeps reading), /exit and
+	// /quit end the session, and anything else is returned as the
+	// submitted message. done reports whether the caller should return
+	// immediately with (msg, quit, nil) or keep looping.
+	trySubmit := func() (msg string, quit bool, done bool) {
+		switch full := submit(); strings.TrimSpace(full) {
+		case "":
+			return "", false, false
+		case "/exit", "/quit":
+			return "", true, true
+		default:
+			return full, false, true
+		}
 	}
 
 	for {
@@ -111,16 +133,23 @@ func nextMessage(src *eventSource, echo io.Writer) (msg string, quit bool, err e
 			newline()
 
 		case key.Code == input.KeyEnter:
-			switch full := submit(); strings.TrimSpace(full) {
-			case "":
-				continue
-			case "/exit", "/quit":
-				return "", true, nil
-			default:
-				return full, false, nil
+			if msg, quit, done := trySubmit(); done {
+				return msg, quit, nil
 			}
 
-		case key.Mod.Contains(input.ModCtrl) && (key.Code == 'c' || key.Code == 'd'):
+		case key.Mod.Contains(input.ModCtrl) && key.Code == 'd':
+			// Ctrl+D only ends the session on an empty buffer, matching
+			// canonical-mode/bash/Python-REPL convention (ADR 0007). With
+			// something typed, it submits exactly like Enter instead.
+			if cur.Len() == 0 && len(lines) == 0 {
+				io.WriteString(echo, crlf)
+				return "", true, nil
+			}
+			if msg, quit, done := trySubmit(); done {
+				return msg, quit, nil
+			}
+
+		case key.Mod.Contains(input.ModCtrl) && key.Code == 'c':
 			io.WriteString(echo, crlf)
 			return "", true, nil
 
