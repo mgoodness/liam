@@ -3,10 +3,12 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mgoodness/liam/agent"
 	"github.com/mgoodness/liam/provider"
@@ -27,6 +29,51 @@ func (f *fakeProvider) Complete(ctx context.Context, messages []provider.Message
 	resp := f.responses[f.calls]
 	f.calls++
 	return resp, nil
+}
+
+// blockingProvider's Complete blocks until ctx is cancelled, simulating a
+// provider request in flight when the caller cancels — then returns
+// ctx.Err(), the way a real ctx-aware HTTP call would. started, if non-nil,
+// is closed once Complete has been entered, so a test can safely cancel
+// only after the blocking call is actually underway.
+type blockingProvider struct {
+	started chan struct{}
+}
+
+func (b *blockingProvider) Complete(ctx context.Context, messages []provider.Message) (provider.Response, error) {
+	if b.started != nil {
+		close(b.started)
+	}
+	<-ctx.Done()
+	return provider.Response{}, ctx.Err()
+}
+
+// blockingTool builds a tool.Tool whose Handler blocks until ctx is
+// cancelled and then returns ctx.Err(), simulating a tool call in flight
+// when the caller cancels. started, if non-nil, is closed once the Handler
+// has been entered.
+func blockingTool(started chan struct{}) tool.Tool {
+	return tool.Tool{
+		Definition: tool.Definition{Name: "block"},
+		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+			if started != nil {
+				close(started)
+			}
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}
+}
+
+// waitDone waits for done to close, failing the test if Run doesn't return
+// promptly after cancellation.
+func waitDone(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return promptly after context cancellation")
+	}
 }
 
 func TestRun_NoToolCalls_ReturnsFinalText(t *testing.T) {
@@ -460,5 +507,167 @@ func TestRun_DoesNotAliasCallersHistoryBackingArray(t *testing.T) {
 	grown := backing[:cap(backing)]
 	if grown[1].Role != "" || grown[1].Content != "" {
 		t.Errorf("Run wrote into the caller's spare backing-array capacity: %+v", grown[1])
+	}
+}
+
+func TestRun_AlreadyCancelledContext_ReturnsImmediatelyWithoutCallingProvider(t *testing.T) {
+	p := &fakeProvider{responses: []provider.Response{{Text: "should not be reached"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	history := []provider.Message{{Role: provider.RoleUser, Content: "hi"}}
+
+	text, updated, err := agent.Run(ctx, p, tool.Tools, history, agent.Callbacks{})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if text != "" {
+		t.Errorf("text = %q, want empty", text)
+	}
+	if len(updated) != 1 || updated[0].Content != "hi" {
+		t.Errorf("updated = %+v, want unchanged original history", updated)
+	}
+	if p.calls != 0 {
+		t.Errorf("provider was called %d times, want 0: an already-cancelled context should short-circuit before calling Complete", p.calls)
+	}
+}
+
+func TestRun_CancelledDuringProviderComplete_ReturnsPromptlyWithHistoryUnchanged(t *testing.T) {
+	started := make(chan struct{})
+	p := &blockingProvider{started: started}
+	ctx, cancel := context.WithCancel(context.Background())
+	history := []provider.Message{{Role: provider.RoleUser, Content: "hi"}}
+
+	var text string
+	var updated []provider.Message
+	var err error
+	done := make(chan struct{})
+	go func() {
+		text, updated, err = agent.Run(ctx, p, tool.Tools, history, agent.Callbacks{})
+		close(done)
+	}()
+
+	<-started
+	cancel()
+	waitDone(t, done)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if text != "" {
+		t.Errorf("text = %q, want empty", text)
+	}
+	if len(updated) != 1 || updated[0].Content != "hi" {
+		t.Errorf("updated = %+v, want unchanged original history (no message appended for the abandoned Complete call)", updated)
+	}
+}
+
+func TestRun_CancelledDuringToolCall_ReturnsPromptlyWithoutSyntheticResult(t *testing.T) {
+	started := make(chan struct{})
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "block", Arguments: json.RawMessage(`{}`)}}},
+		},
+	}
+	tools := map[string]tool.Tool{"block": blockingTool(started)}
+	ctx, cancel := context.WithCancel(context.Background())
+	history := []provider.Message{{Role: provider.RoleUser, Content: "run the blocking tool"}}
+
+	var toolResultFired bool
+	cb := agent.Callbacks{
+		OnToolResult: func(name, result string, err error) {
+			toolResultFired = true
+		},
+	}
+
+	var updated []provider.Message
+	var err error
+	done := make(chan struct{})
+	go func() {
+		_, updated, err = agent.Run(ctx, p, tools, history, cb)
+		close(done)
+	}()
+
+	<-started
+	cancel()
+	waitDone(t, done)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	// user, assistant(call-1) — no tool-result for the abandoned call-1.
+	if len(updated) != 2 {
+		t.Fatalf("updated history has %d messages, want 2: %+v", len(updated), updated)
+	}
+	if updated[1].Role != provider.RoleAssistant || len(updated[1].ToolCalls) != 1 {
+		t.Errorf("updated[1] = %+v, want assistant message carrying the tool call", updated[1])
+	}
+	if toolResultFired {
+		t.Error("OnToolResult fired for a tool call abandoned mid-flight due to cancellation")
+	}
+}
+
+func TestRun_CancelledDuringToolCall_PreservesEarlierRoundToolResults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	writeArgs, err := json.Marshal(map[string]string{"path": path, "content": "A"})
+	if err != nil {
+		t.Fatalf("marshal write args: %v", err)
+	}
+
+	started := make(chan struct{})
+	p := &fakeProvider{
+		responses: []provider.Response{
+			{ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "write", Arguments: writeArgs}}},
+			{ToolCalls: []provider.ToolCall{{ID: "call-2", Name: "block", Arguments: json.RawMessage(`{}`)}}},
+		},
+	}
+	tools := map[string]tool.Tool{
+		"write": tool.Tools["write"],
+		"block": blockingTool(started),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	history := []provider.Message{{Role: provider.RoleUser, Content: "write then block"}}
+
+	var updated []provider.Message
+	var runErr error
+	done := make(chan struct{})
+	go func() {
+		_, updated, runErr = agent.Run(ctx, p, tools, history, agent.Callbacks{})
+		close(done)
+	}()
+
+	<-started
+	cancel()
+	waitDone(t, done)
+
+	if !errors.Is(runErr, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", runErr)
+	}
+
+	// user, assistant(call-1), tool-result(call-1), assistant(call-2) — no
+	// tool-result for call-2, abandoned mid-flight.
+	if len(updated) != 4 {
+		t.Fatalf("updated history has %d messages, want 4: %+v", len(updated), updated)
+	}
+	toolResult := updated[2]
+	if toolResult.Role != provider.RoleTool || toolResult.ToolCallID != "call-1" {
+		t.Errorf("updated[2] = %+v, want preserved tool-result for call-1 from the earlier round", toolResult)
+	}
+	wantResult := fmt.Sprintf("wrote %d bytes to %s", len("A"), path)
+	if toolResult.Content != wantResult {
+		t.Errorf("toolResult.Content = %q, want %q", toolResult.Content, wantResult)
+	}
+	for _, m := range updated {
+		if m.ToolCallID == "call-2" {
+			t.Errorf("expected no tool-result message for call-2 (cancelled mid-flight), got %+v", m)
+		}
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading written file: %v", err)
+	}
+	if string(got) != "A" {
+		t.Errorf("file content = %q, want %q (proves call-1 actually ran before cancellation)", got, "A")
 	}
 }

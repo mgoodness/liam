@@ -31,7 +31,9 @@ type Callbacks struct {
 	// same (already-truncated) result string that gets fed back into
 	// history, so what's reported here matches what the model itself
 	// sees. err is the tool-level error, if any; result already
-	// incorporates it (formatted as "error: ...").
+	// incorporates it (formatted as "error: ..."). Does not fire if the
+	// call was abandoned mid-flight by a cancelled context — OnToolCall
+	// may fire for a call whose OnToolResult never comes.
 	OnToolResult func(name, result string, err error)
 }
 
@@ -50,6 +52,10 @@ func Run(ctx context.Context, p provider.Provider, tools map[string]tool.Tool, h
 	history = append([]provider.Message(nil), history...)
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", history, err
+		}
+
 		resp, err := p.Complete(ctx, history)
 		if err != nil {
 			return "", history, err
@@ -69,6 +75,10 @@ func Run(ctx context.Context, p provider.Provider, tools map[string]tool.Tool, h
 		}
 
 		for _, call := range resp.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return "", history, err
+			}
+
 			if cb.OnToolCall != nil {
 				cb.OnToolCall(call.Name, call.Arguments)
 			}
@@ -76,6 +86,12 @@ func Run(ctx context.Context, p provider.Provider, tools map[string]tool.Tool, h
 			result, err := tool.Call(ctx, tools, call.Name, call.Arguments)
 			if errors.Is(err, tool.ErrUnknownTool) {
 				return "", history, err
+			}
+			// A tool call abandoned mid-flight by cancellation gets no
+			// synthetic result appended — it's not a tool-level failure to
+			// relay to the model, and the model never sees this turn.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", history, ctxErr
 			}
 			if err != nil {
 				result = fmt.Sprintf("error: %s", err)
