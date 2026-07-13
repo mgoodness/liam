@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/mgoodness/liam/compare/v0.2.0...v0.3.0) (2026-07-13)
+
+
+### Features
+
+* vendor-neutral skill discovery paths ([#43](https://github.com/mgoodness/liam/issues/43)) ([a9dab4f](https://github.com/mgoodness/liam/commit/a9dab4feb023fa05f27ec548127623ed21266574)), closes [#42](https://github.com/mgoodness/liam/issues/42)
+
 ## [0.2.0](https://github.com/mgoodness/liam/compare/v0.1.0...v0.2.0) (2026-07-13)
 
 
