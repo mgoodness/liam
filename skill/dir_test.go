@@ -4,35 +4,71 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
-func TestGlobalDir_UsesXDGConfigHome(t *testing.T) {
+func TestGlobalDirs_UsesXDGConfigHomeAndHomeAgentsSkills(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/xdg-config")
+	t.Setenv("HOME", "/home/testuser")
 
-	got, err := GlobalDir()
+	got, err := GlobalDirs()
 	if err != nil {
-		t.Fatalf("GlobalDir: %v", err)
+		t.Fatalf("GlobalDirs: %v", err)
 	}
 
-	want := filepath.Join("/xdg-config", "liam", "skills")
-	if got != want {
-		t.Errorf("GlobalDir = %q, want %q", got, want)
+	want := []string{
+		filepath.Join("/xdg-config", "agents", "skills"),
+		filepath.Join("/home/testuser", ".agents", "skills"),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("GlobalDirs = %v, want %v", got, want)
 	}
 }
 
-func TestGlobalDir_FallsBackToHomeConfig(t *testing.T) {
+func TestGlobalDirs_XDGFallsBackToHomeConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "/home/testuser")
 
-	got, err := GlobalDir()
+	got, err := GlobalDirs()
 	if err != nil {
-		t.Fatalf("GlobalDir: %v", err)
+		t.Fatalf("GlobalDirs: %v", err)
 	}
 
-	want := filepath.Join("/home/testuser", ".config", "liam", "skills")
-	if got != want {
-		t.Errorf("GlobalDir = %q, want %q", got, want)
+	want := []string{
+		filepath.Join("/home/testuser", ".config", "agents", "skills"),
+		filepath.Join("/home/testuser", ".agents", "skills"),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("GlobalDirs = %v, want %v", got, want)
+	}
+}
+
+func TestGlobalDirs_HomeAgentsSkillsWinsOnCollision(t *testing.T) {
+	// GlobalDirs orders the XDG-compliant path before ~/.agents/skills, so
+	// a name collision between them resolves in favor of ~/.agents/skills
+	// per Discover's later-directory-wins rule.
+	xdg := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("HOME", home)
+
+	xdgSkills := filepath.Join(xdg, "agents", "skills")
+	homeSkills := filepath.Join(home, ".agents", "skills")
+	writeSkill(t, xdgSkills, "shared", "name: shared\ndescription: from XDG.\n", "xdg body\n")
+	writeSkill(t, homeSkills, "shared", "name: shared\ndescription: from home.\n", "home body\n")
+
+	dirs, err := GlobalDirs()
+	if err != nil {
+		t.Fatalf("GlobalDirs: %v", err)
+	}
+
+	skills, err := Discover(dirs)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Description != "from home." {
+		t.Fatalf("collision did not resolve in favor of ~/.agents/skills: %+v", skills)
 	}
 }
 
@@ -92,7 +128,7 @@ func TestProjectDir_FallsBackToGivenDirOutsideRepo(t *testing.T) {
 	// Deliberately not a git repo.
 
 	projectDir := ProjectDir(dir)
-	want := filepath.Join(dir, ".liam", "skills")
+	want := filepath.Join(dir, ".agents", "skills")
 	if projectDir != want {
 		t.Errorf("ProjectDir(%q) = %q, want %q", dir, projectDir, want)
 	}

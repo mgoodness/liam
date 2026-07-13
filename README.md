@@ -35,7 +35,7 @@ liam reads a global `AGENTS.md` (`$XDG_CONFIG_HOME/liam/AGENTS.md`, falling back
 
 ### Skills
 
-Drop a `skill-name/SKILL.md` directory (conforming to the open [Agent Skills specification](https://agentskills.io/specification)) into `$XDG_CONFIG_HOME/liam/skills/` (global) or `.liam/skills/` (project) and liam picks it up automatically: its name and description are indexed into the system prompt so the model can decide to use it on its own, or you can invoke it explicitly by typing `/skill-name`.
+Drop a `skill-name/SKILL.md` directory (conforming to the open [Agent Skills specification](https://agentskills.io/specification)) into one of liam's vendor-neutral skill locations and it picks it up automatically: its name and description are indexed into the system prompt so the model can decide to use it on its own, or you can invoke it explicitly by typing `/skill-name`. Globally, that's `~/.agents/skills/` or `$XDG_CONFIG_HOME/agents/skills/`; at the project level, it's `.agents/skills/` at the repository root. None of these paths are namespaced to liam, so a skill you write once works the same way across liam and any other Agent-Skills-compatible tool.
 
 ### Tools
 
