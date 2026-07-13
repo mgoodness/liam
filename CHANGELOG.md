@@ -6,7 +6,7 @@
 ### Features
 
 * add agent loop progress reporting via Callbacks ([#25](https://github.com/mgoodness/liam/issues/25)) ([fe3e3c4](https://github.com/mgoodness/liam/commit/fe3e3c448af9cd3f6be1a5882c23d241e834ea1c)), closes [#20](https://github.com/mgoodness/liam/issues/20)
-* add web_fetch tool ([#23](https://github.com/mgoodness/liam/issues/23)) ([38a8ebd](https://github.com/mgoodness/liam/commit/38a8ebdb0ad3d089491dc4bd1965630a2b359dd5))
+* add web_fetch tool ([#23](https://github.com/mgoodness/liam/issues/23)) ([38a8ebd](https://github.com/mgoodness/liam/commit/38a8ebdb0ad3d089491dc4bd1965630a2b359dd5)), closes [#17](https://github.com/mgoodness/liam/issues/17)
 * add web_search tool backed by the Brave Search API ([#24](https://github.com/mgoodness/liam/issues/24)) ([3edf2f6](https://github.com/mgoodness/liam/commit/3edf2f676746e4ff5f95efb28cfab2126425820f)), closes [#18](https://github.com/mgoodness/liam/issues/18)
 * agent.Run responds to a cancelled context ([#37](https://github.com/mgoodness/liam/issues/37)) ([2e5bb27](https://github.com/mgoodness/liam/commit/2e5bb27a97ffc9c50259928aab0008fc8f4a65ac)), closes [#34](https://github.com/mgoodness/liam/issues/34)
 * Ctrl+C interrupts the current turn ([#39](https://github.com/mgoodness/liam/issues/39)) ([8f8adf3](https://github.com/mgoodness/liam/commit/8f8adf3ed2c57de07015ca4e0ea9ddb9202d28c8)), closes [#35](https://github.com/mgoodness/liam/issues/35)
