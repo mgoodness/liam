@@ -36,17 +36,20 @@ func main() {
 	restore := enableTUIInput(os.Stdin, os.Stdout)
 	defer restore()
 
-	runSession(context.Background(), os.Stdin, os.Stdout, os.Stderr, p, tools, buildSystemPrompt(os.Stderr))
+	skills := discoverSkills(os.Stderr)
+	prompt := buildSystemPrompt(os.Stderr, skills)
+
+	runSession(context.Background(), os.Stdin, os.Stdout, os.Stderr, p, tools, prompt, skills)
 }
 
-// buildSystemPrompt assembles liam's full system prompt: the base prompt,
-// any discovered AGENTS.md content (see fullSystemPrompt), and any
-// discovered skill index appended in turn. Each stage's discovery failures
-// are non-fatal — they're warned to errOut and that stage's contribution
-// is simply omitted, rather than refusing to run.
-func buildSystemPrompt(errOut io.Writer) string {
-	prompt := fullSystemPrompt(errOut)
-
+// discoverSkills resolves liam's global and project skills directories and
+// discovers the skill set from them — the full set, including
+// disable-model-invocation skills, since runSession needs those to resolve
+// explicit /name invocations even though they're excluded from the
+// model-facing index (see ADR 0003). Each stage's discovery failures are
+// non-fatal — they're warned to errOut and that stage's contribution is
+// simply omitted, rather than refusing to run.
+func discoverSkills(errOut io.Writer) []skill.Skill {
 	var dirs []string
 	if global, err := skill.GlobalDir(); err != nil {
 		fmt.Fprintln(errOut, "skill: resolving global skills directory:", err)
@@ -64,8 +67,14 @@ func buildSystemPrompt(errOut io.Writer) string {
 	if err != nil {
 		fmt.Fprintln(errOut, "skill: discovering skills:", err)
 	}
+	return skills
+}
 
-	return appendSkillIndex(prompt, skills)
+// buildSystemPrompt assembles liam's full system prompt: the base prompt,
+// any discovered AGENTS.md content (see fullSystemPrompt), and skills'
+// model-facing index appended in turn.
+func buildSystemPrompt(errOut io.Writer, skills []skill.Skill) string {
+	return appendSkillIndex(fullSystemPrompt(errOut), skills)
 }
 
 // appendSkillIndex appends the model-facing skill index to base, if any
