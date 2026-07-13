@@ -286,7 +286,7 @@ func TestNextMessage_CtrlCEndsSessionAbandoningPartialInput(t *testing.T) {
 	}
 }
 
-func TestNextMessage_CtrlDEndsSession(t *testing.T) {
+func TestNextMessage_CtrlDOnEmptyBufferEndsSession(t *testing.T) {
 	rd := newTestSource(t, newChunkedReader("\x04"))
 
 	msg, quit, err := nextMessage(rd, io.Discard)
@@ -294,10 +294,45 @@ func TestNextMessage_CtrlDEndsSession(t *testing.T) {
 		t.Fatalf("nextMessage returned error: %v", err)
 	}
 	if !quit {
-		t.Fatal("quit = false, want true on Ctrl+D")
+		t.Fatal("quit = false, want true on Ctrl+D with an empty buffer")
 	}
 	if msg != "" {
 		t.Errorf("msg = %q, want empty", msg)
+	}
+}
+
+func TestNextMessage_CtrlDWithPartialInputSubmitsInstead(t *testing.T) {
+	// Matches canonical-mode/bash/Python-REPL convention (ADR 0007): Ctrl+D
+	// only ends the session on an empty buffer. With something typed, it
+	// submits exactly like Enter rather than discarding the input.
+	rd := newTestSource(t, newChunkedReader("hello", "\x04"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want Ctrl+D on a non-empty buffer to submit, not quit")
+	}
+	if msg != "hello" {
+		t.Errorf("msg = %q, want %q", msg, "hello")
+	}
+}
+
+func TestNextMessage_CtrlDWithAccumulatedMultilineBufferSubmitsInstead(t *testing.T) {
+	// The buffer counts as non-empty even when the current line is empty
+	// but earlier lines were accumulated via Shift+Enter/Ctrl+J.
+	rd := newTestSource(t, newChunkedReader("line one", "\x1b[13;2u", "\x04"))
+
+	msg, quit, err := nextMessage(rd, io.Discard)
+	if err != nil {
+		t.Fatalf("nextMessage returned error: %v", err)
+	}
+	if quit {
+		t.Fatal("quit = true, want Ctrl+D to submit accumulated multi-line input, not quit")
+	}
+	if msg != "line one\n" {
+		t.Errorf("msg = %q, want %q", msg, "line one\n")
 	}
 }
 
