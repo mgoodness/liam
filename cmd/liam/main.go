@@ -51,10 +51,10 @@ func main() {
 // simply omitted, rather than refusing to run.
 func discoverSkills(errOut io.Writer) []skill.Skill {
 	var dirs []string
-	if global, err := skill.GlobalDir(); err != nil {
-		fmt.Fprintln(errOut, "skill: resolving global skills directory:", err)
+	if global, err := skill.GlobalDirs(); err != nil {
+		fmt.Fprintln(errOut, "skill: resolving global skills directories:", err)
 	} else {
-		dirs = append(dirs, global)
+		dirs = append(dirs, global...)
 	}
 
 	if cwd, err := os.Getwd(); err != nil {
