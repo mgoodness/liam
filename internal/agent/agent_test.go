@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"os"
 	"testing"
 
+	"github.com/mgoodness/liam/internal/config"
+	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
@@ -360,6 +363,157 @@ func TestRunPreservesPartialTextOnStreamError(t *testing.T) {
 	}
 	if got[1].Role != "assistant" || got[1].Content != "partial" {
 		t.Errorf("messages[1] = %+v, want assistant %q", got[1], "partial")
+	}
+}
+
+// TestRunBlockingBeforeToolHookDeniesCallWithoutRunningTool drives a real
+// hook.Runner configured with a stub "beforeTool" hook command (a tiny
+// inline shell script standing in for a user-authored policy hook) that
+// denies every call: the fake Tool must never run, and the hook's stderr
+// becomes the tool-role Result the model sees.
+func TestRunBlockingBeforeToolHookDeniesCallWithoutRunningTool(t *testing.T) {
+	ft := &fakeTool{name: "bash", result: tool.Result{Content: "should never run"}}
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{
+			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{"command":"rm -rf /"}`},
+			provider.DoneEvent{FinishReason: "tool_calls"},
+		},
+		{
+			provider.DoneEvent{FinishReason: "stop"},
+		},
+	}}
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		BeforeTool: []config.HookConfig{{Command: `echo "denied by policy" >&2; exit 1`}},
+	}}
+	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
+
+	got, err := l.Run(context.Background(), provider.Request{}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if ft.gotArg != nil {
+		t.Errorf("tool.Run was called (gotArg = %+v), want the blocking hook to prevent it", ft.gotArg)
+	}
+
+	var toolMsg *provider.Message
+	for i := range got {
+		if got[i].Role == "tool" {
+			toolMsg = &got[i]
+		}
+	}
+	if toolMsg == nil {
+		t.Fatalf("no tool-role message in %+v", got)
+	}
+	if toolMsg.Content != "denied by policy" {
+		t.Errorf("tool result Content = %q, want the blocking hook's stderr", toolMsg.Content)
+	}
+}
+
+// TestRunAllowingBeforeToolHookLetsToolRun covers the complementary case: a
+// beforeTool hook that exits 0 lets the call through normally.
+func TestRunAllowingBeforeToolHookLetsToolRun(t *testing.T) {
+	ft := &fakeTool{name: "bash", result: tool.Result{Content: "ran fine"}}
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{
+			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{}`},
+			provider.DoneEvent{FinishReason: "tool_calls"},
+		},
+		{
+			provider.DoneEvent{FinishReason: "stop"},
+		},
+	}}
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		BeforeTool: []config.HookConfig{{Command: "exit 0"}},
+	}}
+	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
+
+	got, err := l.Run(context.Background(), provider.Request{}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if ft.gotArg == nil {
+		t.Error("tool.Run was never called, want the allowing hook to let it through")
+	}
+
+	var toolMsg *provider.Message
+	for i := range got {
+		if got[i].Role == "tool" {
+			toolMsg = &got[i]
+		}
+	}
+	if toolMsg == nil || toolMsg.Content != "ran fine" {
+		t.Fatalf("messages = %+v, want the tool's own result", got)
+	}
+}
+
+// TestRunAsyncBeforeToolHookNeverBlocksToolCall covers async: true's
+// fire-and-forget contract reaching all the way through the agent loop: an
+// async beforeTool hook that would otherwise deny (non-zero exit) can't gate
+// the call it's attached to.
+func TestRunAsyncBeforeToolHookNeverBlocksToolCall(t *testing.T) {
+	ft := &fakeTool{name: "bash", result: tool.Result{Content: "ran anyway"}}
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{
+			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{}`},
+			provider.DoneEvent{FinishReason: "tool_calls"},
+		},
+		{
+			provider.DoneEvent{FinishReason: "stop"},
+		},
+	}}
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		BeforeTool: []config.HookConfig{{Command: "exit 1", Async: true}},
+	}}
+	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
+
+	got, err := l.Run(context.Background(), provider.Request{}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if ft.gotArg == nil {
+		t.Error("tool.Run was never called, want an async hook to never block")
+	}
+
+	var toolMsg *provider.Message
+	for i := range got {
+		if got[i].Role == "tool" {
+			toolMsg = &got[i]
+		}
+	}
+	if toolMsg == nil || toolMsg.Content != "ran anyway" {
+		t.Fatalf("messages = %+v, want the tool's own result", got)
+	}
+}
+
+// TestRunAfterToolHookRunsOnceToolCompletes exercises the afterTool
+// lifecycle point end-to-end: a stub hook command writes to a temp file, and
+// the test asserts it ran only after (and because of) the dispatched tool
+// call completing.
+func TestRunAfterToolHookRunsOnceToolCompletes(t *testing.T) {
+	dir := t.TempDir()
+	ranPath := dir + "/after-tool-ran"
+
+	ft := &fakeTool{name: "bash", result: tool.Result{Content: "done"}}
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{
+			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{}`},
+			provider.DoneEvent{FinishReason: "tool_calls"},
+		},
+		{
+			provider.DoneEvent{FinishReason: "stop"},
+		},
+	}}
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		AfterTool: []config.HookConfig{{Command: "touch " + ranPath}},
+	}}
+	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
+
+	if _, err := l.Run(context.Background(), provider.Request{}, nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if _, err := os.Stat(ranPath); err != nil {
+		t.Errorf("afterTool hook did not run: %v", err)
 	}
 }
 

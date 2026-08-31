@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"iter"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
+	"github.com/mgoodness/liam/internal/hook"
+	"github.com/mgoodness/liam/internal/provider"
 )
 
 func TestRunRequiresAPIKey(t *testing.T) {
@@ -53,6 +58,51 @@ func TestRunNoArgsOpensInteractiveTUI(t *testing.T) {
 	}
 }
 
+// TestRunInteractiveQuitFiresSessionEndHookExactlyOnce covers issue #45's
+// sessionEnd lifecycle point end-to-end in interactive mode: runInteractive
+// guarantees it fires once when the program exits, regardless of which
+// quit path (here, "/quit") got it there — a project liam.jsonc configures
+// a sessionEnd hook that appends a line to a marker file, and "/quit" must
+// cause exactly one line to land.
+func TestRunInteractiveQuitFiresSessionEndHookExactlyOnce(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	cwd := t.TempDir()
+	markerPath := filepath.Join(cwd, "ended")
+	configContent := []byte(`{
+  "hooks": { "sessionEnd": [{ "command": "echo x >> ` + markerPath + `" }] }
+}`)
+	if err := os.WriteFile(filepath.Join(cwd, "liam.jsonc"), configContent, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Chdir(cwd)
+
+	var stdout, stderr bytes.Buffer
+	stdin := strings.NewReader("/quit\r")
+
+	done := make(chan int, 1)
+	go func() { done <- run(nil, stdin, &stdout, &stderr) }()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run() did not return within 5s of \"/quit\" being submitted")
+	}
+
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("sessionEnd hook did not run: %v", err)
+	}
+	if lines := strings.Count(string(data), "\n"); lines != 1 {
+		t.Errorf("sessionEnd hook ran %d times, want exactly 1", lines)
+	}
+}
+
 // TestConfigFileModelReachesBuildRequest is the config system's own
 // end-to-end check (issue #43): a provider.model set in a project
 // liam.jsonc, loaded the same way run() loads it, changes the model
@@ -89,6 +139,48 @@ func TestBuildRequestThreadsSystemPrompt(t *testing.T) {
 	req := buildRequest(config.Config{}, "hello", "skill instructions")
 	if req.SystemPrompt != "skill instructions" {
 		t.Errorf("req.SystemPrompt = %q, want %q", req.SystemPrompt, "skill instructions")
+	}
+}
+
+// doneProvider is a minimal provider.Provider that immediately yields a
+// DoneEvent, standing in for a real model backend in headless-mode tests
+// that only care about hook lifecycle wiring, not turn content.
+type doneProvider struct{}
+
+func (doneProvider) Name() string { return "done" }
+func (doneProvider) Stream(context.Context, provider.Request) iter.Seq2[provider.Event, error] {
+	return func(yield func(provider.Event, error) bool) {
+		yield(provider.DoneEvent{FinishReason: "stop"}, nil)
+	}
+}
+
+// TestRunHeadlessFiresSessionStartAndSessionEndHooks covers issue #45's
+// sessionStart/sessionEnd lifecycle points in headless mode: both must fire
+// exactly once, bracketing the single turn.
+func TestRunHeadlessFiresSessionStartAndSessionEndHooks(t *testing.T) {
+	dir := t.TempDir()
+	startedPath := filepath.Join(dir, "started")
+	endedPath := filepath.Join(dir, "ended")
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		SessionStart: []config.HookConfig{{Command: "touch " + startedPath}},
+		SessionEnd:   []config.HookConfig{{Command: "touch " + endedPath}},
+	}}
+	loop := agent.Loop{Provider: doneProvider{}, Hooks: hooks}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, config.Config{}, "hi", "", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runHeadless() = %d, want 0; stderr = %q", code, stderr.String())
+	}
+
+	if _, err := os.Stat(startedPath); err != nil {
+		t.Errorf("sessionStart hook did not run: %v", err)
+	}
+	if _, err := os.Stat(endedPath); err != nil {
+		t.Errorf("sessionEnd hook did not run: %v", err)
+	}
+	if hooks.SessionID == "" {
+		t.Error("hooks.SessionID was never set")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
+	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
@@ -168,6 +169,59 @@ func TestSubmitSlashClearResetsSessionAndLines(t *testing.T) {
 	}
 	if mm.sess.ID == oldID {
 		t.Error("/clear did not assign a fresh session ID")
+	}
+}
+
+// TestNewFiresSessionStartHookAndPointsRunnerAtTheSession covers issue #45's
+// sessionStart lifecycle point in the interactive TUI: New must fire it
+// immediately, with the shared hook.Runner already pointed at the freshly
+// assigned session ID.
+func TestNewFiresSessionStartHookAndPointsRunnerAtTheSession(t *testing.T) {
+	dir := t.TempDir()
+	startedPath := dir + "/started"
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		SessionStart: []config.HookConfig{{Command: "touch " + startedPath}},
+	}}
+
+	m := New(agent.Loop{Hooks: hooks}, config.Config{}, nil)
+
+	if !fileExists(startedPath) {
+		t.Error("sessionStart hook did not run")
+	}
+	if hooks.SessionID != m.sess.ID {
+		t.Errorf("hooks.SessionID = %q, want the session's ID %q", hooks.SessionID, m.sess.ID)
+	}
+}
+
+// TestSubmitSlashClearFiresSessionEndThenSessionStart covers /clear's
+// lifecycle: the old session's sessionEnd fires, then the new session's
+// sessionStart fires with the Runner repointed at the new session ID.
+func TestSubmitSlashClearFiresSessionEndThenSessionStart(t *testing.T) {
+	dir := t.TempDir()
+	endedPath := dir + "/ended"
+	startedPath := dir + "/started"
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		SessionStart: []config.HookConfig{{Command: "touch " + startedPath}},
+		SessionEnd:   []config.HookConfig{{Command: "touch " + endedPath}},
+	}}
+	m := New(agent.Loop{Hooks: hooks}, config.Config{}, nil)
+	if err := removeFile(startedPath); err != nil {
+		t.Fatalf("removing New()'s own sessionStart marker: %v", err)
+	}
+	oldID := m.sess.ID
+	m.input.SetValue("/clear")
+
+	next, _ := m.submit()
+	mm := next.(Model)
+
+	if !fileExists(endedPath) {
+		t.Error("sessionEnd hook did not run on /clear")
+	}
+	if !fileExists(startedPath) {
+		t.Error("sessionStart hook did not re-run on /clear")
+	}
+	if hooks.SessionID != mm.sess.ID || hooks.SessionID == oldID {
+		t.Errorf("hooks.SessionID = %q, want the new session's ID %q (old was %q)", hooks.SessionID, mm.sess.ID, oldID)
 	}
 }
 
