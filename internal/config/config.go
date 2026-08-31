@@ -57,8 +57,25 @@ type HookConfig struct {
 	Async bool `json:"async,omitempty"`
 }
 
-// MCPServersConfig is a stub, populated by a later ticket.
-type MCPServersConfig struct{}
+// MCPServersConfig configures liam's MCP client, keyed by server name — the
+// convention shared with Claude Desktop, Claude Code, and Cursor.
+type MCPServersConfig map[string]MCPServerConfig
+
+// MCPServerConfig is one stdio-transport MCP server: launched as a
+// subprocess, its tools capability registered into liam's toolset.
+type MCPServerConfig struct {
+	// Command is the executable to launch. Required.
+	Command string `json:"command"`
+	// Args are passed to Command.
+	Args []string `json:"args,omitempty"`
+	// Env sets additional environment variables for the subprocess. Values
+	// support $VAR expansion against the harness's own environment.
+	Env map[string]string `json:"env,omitempty"`
+	// Tools, if non-empty, allow-lists which of the server's tools are
+	// registered into liam's toolset, protecting the context budget from a
+	// large server. Empty registers every tool the server exposes.
+	Tools []string `json:"tools,omitempty"`
+}
 
 // SkillsConfig configures Agent Skills discovery and trust.
 type SkillsConfig struct {

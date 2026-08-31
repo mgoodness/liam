@@ -24,11 +24,13 @@ import (
 
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
+	"github.com/mgoodness/liam/internal/mcp"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/theme"
+	"github.com/mgoodness/liam/internal/tool"
 )
 
 // line is one rendered row of the conversation scrollback.
@@ -47,6 +49,11 @@ type turnDoneMsg struct {
 	messages []provider.Message
 	err      error
 }
+
+// systemLineMsg appends a system-role scrollback line for an out-of-band
+// notice — e.g. an MCP load timeout or per-server error — that isn't part
+// of the streamed provider.Event sequence.
+type systemLineMsg struct{ text string }
 
 // Model is the Bubbletea model driving liam's interactive shell.
 type Model struct {
@@ -68,6 +75,20 @@ type Model struct {
 	busy   bool
 	cancel context.CancelFunc
 	events chan tea.Msg // non-nil while a turn is in flight
+
+	mcpLoader    mcp.ToolLoader // set via WithMCPLoader; nil means no mcpServers configured
+	mcpAttempted bool           // guards waiting on mcpLoader to exactly the session's first turn
+}
+
+// WithMCPLoader attaches loader, whose tools are waited for (bounded by
+// mcp.DefaultLoadTimeout) and merged into the toolset on the session's
+// first turn only — after which every subsequent turn uses the merged
+// registry with no further wait. A nil loader (the default, unset) means
+// no mcpServers are configured; every existing New(...) call site is
+// unaffected.
+func (m Model) WithMCPLoader(loader mcp.ToolLoader) Model {
+	m.mcpLoader = loader
+	return m
 }
 
 // New builds the initial Model for an interactive session. skills is
@@ -164,6 +185,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case turnDoneMsg:
 		m.finishTurn(msg.messages, msg.err)
 		return m, nil
+
+	case systemLineMsg:
+		m.lines = append(m.lines, line{role: "system", text: msg.text})
+		return m, waitForMsg(m.events)
 	}
 
 	var cmd tea.Cmd
@@ -236,15 +261,38 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.cancel = cancel
 	m.events = events
 
+	// mcpLoader is waited on (bounded by mcp.DefaultLoadTimeout) inside
+	// runTurn's own background goroutine, never here — submit() runs on
+	// Bubbletea's main Update loop, so blocking here would freeze the UI.
+	// mcpAttempted guards this to the session's first turn only; loop.Tools
+	// is a map (a reference type), so runTurn's merge into it is visible to
+	// every later turn without needing to thread anything back through m.
+	waitForMCP := !m.mcpAttempted && m.mcpLoader != nil
+	m.mcpAttempted = true
+
 	loop := m.loop
-	go runTurn(ctx, loop, req, events)
+	loader := m.mcpLoader
+	go runTurn(ctx, loop, req, events, loader, waitForMCP)
 
 	return m, waitForMsg(events)
 }
 
 // runTurn drives one agent.Loop turn in the background, forwarding every
 // streamed Event and the final result over events for Update to pick up.
-func runTurn(ctx context.Context, loop agent.Loop, req provider.Request, events chan<- tea.Msg) {
+// When waitForMCP is set, loader's tools are waited for (bounded by
+// mcp.DefaultLoadTimeout, or by ctx — e.g. Escape-cancellation) and merged
+// into loop.Tools before the turn runs, with any timeout/per-server error
+// sent back as a systemLineMsg.
+func runTurn(ctx context.Context, loop agent.Loop, req provider.Request, events chan<- tea.Msg, loader mcp.ToolLoader, waitForMCP bool) {
+	if waitForMCP && loader != nil {
+		if loop.Tools == nil {
+			loop.Tools = tool.NewRegistry()
+		}
+		mcp.Merge(ctx, loop.Tools, loader, func(msg string) {
+			events <- systemLineMsg{text: msg}
+		})
+	}
+
 	messages, err := loop.Run(ctx, req, func(ev provider.Event) {
 		events <- streamMsg{ev: ev}
 	})
