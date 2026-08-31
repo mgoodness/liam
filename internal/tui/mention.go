@@ -36,28 +36,38 @@ type mentionState struct {
 // ":10-20" line-range suffix from the file part it filters on.
 var fileRefRangeRe = regexp.MustCompile(`^(.*):(\d+)(?:-(\d+))?$`)
 
-// parseFileReference splits query into its file-search part and an optional
-// 1-indexed inclusive line range. hasRange is false (and start/end are 0)
-// when query has no ":N"/":N-M" suffix, or the suffix doesn't parse into a
-// sane non-empty ascending range.
-func parseFileReference(query string) (filePart string, start, end int, hasRange bool) {
+// fileReference is a mention query split into the file-search part and an
+// optional 1-indexed inclusive line range parsed from a trailing
+// ":42"/":10-20" suffix.
+type fileReference struct {
+	query    string // the file-search part, with any range suffix stripped
+	start    int
+	end      int
+	hasRange bool
+}
+
+// parseFileReference splits query per fileReference's doc comment. hasRange
+// is false (and start/end are 0, query returned unchanged) when query has no
+// ":N"/":N-M" suffix, or the suffix doesn't parse into a sane non-empty
+// ascending range.
+func parseFileReference(query string) fileReference {
 	m := fileRefRangeRe.FindStringSubmatch(query)
 	if m == nil {
-		return query, 0, 0, false
+		return fileReference{query: query}
 	}
 
 	start, err := strconv.Atoi(m[2])
 	if err != nil || start < 1 {
-		return query, 0, 0, false
+		return fileReference{query: query}
 	}
-	end = start
+	end := start
 	if m[3] != "" {
 		end, err = strconv.Atoi(m[3])
 		if err != nil || end < start {
-			return query, 0, 0, false
+			return fileReference{query: query}
 		}
 	}
-	return m[1], start, end, true
+	return fileReference{query: m[1], start: start, end: end, hasRange: true}
 }
 
 // clampColumn clamps col to a valid index into line — textarea.Column() can
@@ -118,9 +128,9 @@ func (m *Model) updateMention() {
 	}
 
 	query := string(lineRunes[start+1 : col])
-	filePart, _, _, _ := parseFileReference(query)
+	ref := parseFileReference(query)
 
-	matches, _, err := m.findSearcher.Find(context.Background(), filePart)
+	matches, _, err := m.findSearcher.Find(context.Background(), ref.query)
 	if err != nil {
 		matches = nil
 	}
@@ -153,9 +163,9 @@ func (m Model) selectMention() Model {
 		return m
 	}
 	path := m.mention.matches[m.mention.selected]
-	_, start, end, hasRange := parseFileReference(m.mention.query)
+	ref := parseFileReference(m.mention.query)
 
-	inserted, err := renderFileReference(path, start, end, hasRange)
+	inserted, err := renderFileReference(path, ref)
 	if err != nil {
 		inserted = fmt.Sprintf("[file: %s — error: %v]", path, err)
 	}
@@ -182,36 +192,37 @@ func (m Model) selectMention() Model {
 	return m
 }
 
-// renderFileReference reads path and formats it (or just lines start-end,
-// 1-indexed inclusive, with "Line N: " context, when hasRange) delimited by
-// a "[file: ...]"/"[/file: ...]" marker pair so the model can distinguish
+// renderFileReference reads path and formats it (or just ref's lines,
+// 1-indexed inclusive, with "Line N: " context, when ref.hasRange) delimited
+// by a "[file: ...]"/"[/file: ...]" marker pair so the model can distinguish
 // inlined content from the user's own text.
-func renderFileReference(path string, start, end int, hasRange bool) (string, error) {
+func renderFileReference(path string, ref fileReference) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 
-	if !hasRange {
+	if !ref.hasRange {
 		return fmt.Sprintf("[file: %s]\n%s\n[/file: %s]", path, string(data), path), nil
 	}
 
 	lines := strings.Split(string(data), "\n")
-	if start > len(lines) {
-		return "", fmt.Errorf("%s: line range %d-%d out of bounds (file has %d lines)", path, start, end, len(lines))
+	if ref.start > len(lines) {
+		return "", fmt.Errorf("%s: line range %d-%d out of bounds (file has %d lines)", path, ref.start, ref.end, len(lines))
 	}
+	end := ref.end
 	if end > len(lines) {
 		end = len(lines)
 	}
 
-	label := fmt.Sprintf("%s:%d", path, start)
-	if end != start {
-		label = fmt.Sprintf("%s:%d-%d", path, start, end)
+	label := fmt.Sprintf("%s:%d", path, ref.start)
+	if end != ref.start {
+		label = fmt.Sprintf("%s:%d-%d", path, ref.start, end)
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "[file: %s]\n", label)
-	for i := start; i <= end; i++ {
+	for i := ref.start; i <= end; i++ {
 		fmt.Fprintf(&b, "Line %d: %s\n", i, lines[i-1])
 	}
 	fmt.Fprintf(&b, "[/file: %s]", label)

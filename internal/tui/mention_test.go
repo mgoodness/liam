@@ -14,47 +14,47 @@ import (
 )
 
 func TestParseFileReferenceNoSuffixIsNoRange(t *testing.T) {
-	file, start, end, hasRange := parseFileReference("internal/tui/tui.go")
-	if hasRange {
+	ref := parseFileReference("internal/tui/tui.go")
+	if ref.hasRange {
 		t.Fatalf("hasRange = true, want false for a plain path")
 	}
-	if file != "internal/tui/tui.go" || start != 0 || end != 0 {
-		t.Errorf("got (%q, %d, %d, %v), want the path unchanged with a zero range", file, start, end, hasRange)
+	if ref.query != "internal/tui/tui.go" || ref.start != 0 || ref.end != 0 {
+		t.Errorf("got %+v, want the path unchanged with a zero range", ref)
 	}
 }
 
 func TestParseFileReferenceSingleLine(t *testing.T) {
-	file, start, end, hasRange := parseFileReference("main.go:42")
-	if !hasRange {
+	ref := parseFileReference("main.go:42")
+	if !ref.hasRange {
 		t.Fatal("hasRange = false, want true for \"main.go:42\"")
 	}
-	if file != "main.go" || start != 42 || end != 42 {
-		t.Errorf("got (%q, %d, %d), want (\"main.go\", 42, 42)", file, start, end)
+	if ref.query != "main.go" || ref.start != 42 || ref.end != 42 {
+		t.Errorf("got %+v, want query=\"main.go\", start=42, end=42", ref)
 	}
 }
 
 func TestParseFileReferenceLineRange(t *testing.T) {
-	file, start, end, hasRange := parseFileReference("main.go:10-20")
-	if !hasRange {
+	ref := parseFileReference("main.go:10-20")
+	if !ref.hasRange {
 		t.Fatal("hasRange = false, want true for \"main.go:10-20\"")
 	}
-	if file != "main.go" || start != 10 || end != 20 {
-		t.Errorf("got (%q, %d, %d), want (\"main.go\", 10, 20)", file, start, end)
+	if ref.query != "main.go" || ref.start != 10 || ref.end != 20 {
+		t.Errorf("got %+v, want query=\"main.go\", start=10, end=20", ref)
 	}
 }
 
 func TestParseFileReferenceRejectsDescendingRange(t *testing.T) {
-	file, _, _, hasRange := parseFileReference("main.go:20-10")
-	if hasRange {
+	ref := parseFileReference("main.go:20-10")
+	if ref.hasRange {
 		t.Fatal("hasRange = true, want false for a descending range")
 	}
-	if file != "main.go:20-10" {
-		t.Errorf("file = %q, want the original query returned unchanged", file)
+	if ref.query != "main.go:20-10" {
+		t.Errorf("query = %q, want the original query returned unchanged", ref.query)
 	}
 }
 
 func TestParseFileReferenceRejectsZeroLine(t *testing.T) {
-	if _, _, _, hasRange := parseFileReference("main.go:0"); hasRange {
+	if parseFileReference("main.go:0").hasRange {
 		t.Error("hasRange = true, want false for line 0")
 	}
 }
@@ -62,12 +62,12 @@ func TestParseFileReferenceRejectsZeroLine(t *testing.T) {
 func TestParseFileReferencePathWithColonNoDigits(t *testing.T) {
 	// A path that happens to contain ":" but no trailing digits (e.g. a
 	// Windows-style drive prefix) must not be misparsed as a line range.
-	file, _, _, hasRange := parseFileReference("C:/foo/bar.go")
-	if hasRange {
+	ref := parseFileReference("C:/foo/bar.go")
+	if ref.hasRange {
 		t.Error("hasRange = true, want false when the suffix isn't numeric")
 	}
-	if file != "C:/foo/bar.go" {
-		t.Errorf("file = %q, want the query unchanged", file)
+	if ref.query != "C:/foo/bar.go" {
+		t.Errorf("query = %q, want the query unchanged", ref.query)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestRenderFileReferenceWholeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := renderFileReference(path, 0, 0, false)
+	got, err := renderFileReference(path, fileReference{})
 	if err != nil {
 		t.Fatalf("renderFileReference: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRenderFileReferenceLineRangeAddsLineNumberContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := renderFileReference(path, 2, 4, true)
+	got, err := renderFileReference(path, fileReference{start: 2, end: 4, hasRange: true})
 	if err != nil {
 		t.Fatalf("renderFileReference: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRenderFileReferenceOutOfBoundsRangeErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := renderFileReference(path, 10, 20, true); err == nil {
+	if _, err := renderFileReference(path, fileReference{start: 10, end: 20, hasRange: true}); err == nil {
 		t.Error("renderFileReference with an out-of-bounds range returned nil error")
 	}
 }
