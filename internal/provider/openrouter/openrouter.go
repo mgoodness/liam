@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"sync"
 
 	openroutersdk "github.com/OpenRouterTeam/go-sdk"
 
@@ -17,6 +18,9 @@ import (
 // "openrouter/auto" model when a Request doesn't specify one.
 type Provider struct {
 	client *openroutersdk.OpenRouter
+
+	contextMu    sync.Mutex
+	contextCache map[string]int // model id -> max context length, memoized by MaxContextLength
 }
 
 var _ provider.Provider = (*Provider)(nil)
@@ -25,7 +29,10 @@ var _ provider.Provider = (*Provider)(nil)
 // openroutersdk.WithServerURL, for tests) are applied after the security
 // option, so they can't accidentally drop the API key.
 func New(apiKey string, opts ...openroutersdk.SDKOption) *Provider {
-	return &Provider{client: openroutersdk.New(clientOptions(apiKey, opts...)...)}
+	return &Provider{
+		client:       openroutersdk.New(clientOptions(apiKey, opts...)...),
+		contextCache: map[string]int{},
+	}
 }
 
 func (p *Provider) Name() string { return "openrouter" }

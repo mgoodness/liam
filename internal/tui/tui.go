@@ -320,7 +320,7 @@ func (m *Model) handleEvent(ev provider.Event) {
 		m.flushStreaming()
 		m.lines = append(m.lines, line{role: "tool", text: render.ToolCall(e.Name, e.ArgsJSON, e.Content, e.IsError)})
 	case provider.DoneEvent:
-		m.sess.Record(e.Usage)
+		m.sess.Record(e.ModelUsed, e.Usage)
 	}
 }
 
