@@ -14,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mgoodness/liam/internal/compact"
 	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
+	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/tool"
 )
 
@@ -35,6 +37,11 @@ const (
 	retryMaxDelay  = 10 * time.Second
 )
 
+// autoCompactThreshold is the context-usage fraction (issue #54, reusing
+// issue #52's tracker) at or above which Run proactively compacts the
+// conversation before sending the next turn's request.
+const autoCompactThreshold = 0.85
+
 // Loop drives one or more Provider turns for a single user message,
 // dispatching tool calls against Tools until the model's turn produces no
 // further tool calls.
@@ -50,6 +57,28 @@ type Loop struct {
 	// defaultBackoff, the real jittered exponential backoff; tests override
 	// it to avoid real sleeps.
 	Backoff func(attempt int) time.Duration
+
+	// Session, when non-nil, is issue #54's compaction wiring: consulted at
+	// the top of every turn via ContextLookup to decide whether usage has
+	// crossed autoCompactThreshold (~85%) and auto-compaction should fire
+	// before the request goes out, and reset (via ResetContext) whenever
+	// compaction fires — proactively, or reactively on a ContextTooLong
+	// ProviderError — so the reported percentage goes back to unset until
+	// the next DoneEvent repopulates it. Callers are expected to pass the
+	// very same *session.Session they already update from onEvent's
+	// DoneEvent case (see session.Session.Record), so Run sees each turn's
+	// usage without duplicating that bookkeeping itself. nil disables
+	// auto-compaction and the tracker reset — reactive
+	// ContextTooLong-triggered compaction still works without it (e.g. in
+	// headless mode, which has no persistent Session).
+	Session *session.Session
+	// ContextLookup resolves Session.LastModel to its max context length
+	// for the auto-compaction percentage check; required alongside Session
+	// — nil leaves auto-compaction disabled even with Session set.
+	ContextLookup session.ContextLookup
+	// KeepRecentTurns overrides compact.DefaultKeepRecentTurns's sliding
+	// window size; <= 0 uses the default.
+	KeepRecentTurns int
 }
 
 // Run sends req, dispatching any ToolCallEvents the Provider yields against
@@ -69,11 +98,27 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 	tools := toolDefs(l.Tools)
 
 	for {
+		messages = l.autoCompactIfNeeded(ctx, messages, req.Model)
+
 		turnReq := req
 		turnReq.Messages = messages
 		turnReq.Tools = tools
 
 		text, calls, err := l.streamTurn(ctx, turnReq, onEvent)
+		if isContextTooLong(err) {
+			// Issue #54's ContextTooLong extension point: compact once and
+			// retry the same request exactly once — a fresh isRetryable
+			// backoff-and-resend cycle wouldn't help here, since resending
+			// the identical oversized request would just fail the same way
+			// again. A failed or no-op compaction leaves err as the
+			// ContextTooLong failure, falling through to the normal error
+			// path below.
+			if recompacted, ok := l.compactMessages(ctx, messages, req.Model); ok {
+				messages = recompacted
+				turnReq.Messages = messages
+				text, calls, err = l.streamTurn(ctx, turnReq, onEvent)
+			}
+		}
 		if err != nil {
 			// Preserve whatever text the failing (non-retried) attempt had
 			// already streamed — e.g. an Escape-cancelled turn — rather than
@@ -165,15 +210,16 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 // applying the ProviderError.Kind-based retry policy: RateLimited and
 // Unavailable auto-retry with jittered exponential backoff (up to
 // maxStreamAttempts total attempts); every other Kind — including
-// ContextTooLong, which ticket 13 (compaction) will change to compact and
-// retry once instead — surfaces on the first attempt, like a
-// non-ProviderError or an unclassified error would. Retries are invisible
-// to the model: a failed attempt's accumulated text/calls are discarded and
-// a fresh attempt starts, so only the eventual success or final failure is
-// ever threaded into the conversation. onEvent still fires live as each
-// attempt streams; a retried attempt is expected to fail before yielding
-// any events in practice (a provider-level retryable error surfaces before
-// any content), so this doesn't visibly leak a retried attempt's output.
+// ContextTooLong, whose own compact-then-retry-once handling lives one
+// level up, in Run (see isContextTooLong/compactMessages) — surfaces on the
+// first attempt here, like a non-ProviderError or an unclassified error
+// would. Retries are invisible to the model: a failed attempt's
+// accumulated text/calls are discarded and a fresh attempt starts, so only
+// the eventual success or final failure is ever threaded into the
+// conversation. onEvent still fires live as each attempt streams; a
+// retried attempt is expected to fail before yielding any events in
+// practice (a provider-level retryable error surfaces before any content),
+// so this doesn't visibly leak a retried attempt's output.
 func (l Loop) streamTurn(ctx context.Context, req provider.Request, onEvent func(provider.Event)) (string, []provider.ToolCall, error) {
 	for attempt := 1; ; attempt++ {
 		var text strings.Builder
@@ -209,7 +255,12 @@ func (l Loop) streamTurn(ctx context.Context, req provider.Request, onEvent func
 }
 
 // isRetryable reports whether err is a *provider.ProviderError whose Kind
-// the retry policy auto-retries.
+// the backoff-and-resend retry policy auto-retries. ContextTooLong is
+// deliberately excluded here even though issue #54 does now retry it:
+// backoff-and-resend would just resubmit the identical oversized request,
+// so that case gets its own compact-then-retry-once handling in Run
+// instead (see isContextTooLong/compactMessages), which needs to rewrite
+// the conversation, not just wait and resend.
 func isRetryable(err error) bool {
 	var perr *provider.ProviderError
 	if !errors.As(err, &perr) {
@@ -218,15 +269,51 @@ func isRetryable(err error) bool {
 	switch perr.Kind {
 	case provider.ErrorKindRateLimited, provider.ErrorKindUnavailable:
 		return true
-	case provider.ErrorKindContextTooLong:
-		// Ticket 13 (compaction) is this case's extension point: it'll
-		// change this to compact the conversation and retry once instead
-		// of returning false. For now (ticket 51), treated like Unknown —
-		// surface immediately.
-		return false
 	default:
 		return false
 	}
+}
+
+// isContextTooLong reports whether err is a *provider.ProviderError whose
+// Kind is ContextTooLong.
+func isContextTooLong(err error) bool {
+	var perr *provider.ProviderError
+	return errors.As(err, &perr) && perr.Kind == provider.ErrorKindContextTooLong
+}
+
+// autoCompactIfNeeded consults l.Session/l.ContextLookup (both required —
+// either nil disables this) and, when the last recorded turn's usage is at
+// or above autoCompactThreshold, compacts messages before it's sent as
+// this turn's request. A lookup error or a below-threshold percentage
+// leaves messages untouched.
+func (l Loop) autoCompactIfNeeded(ctx context.Context, messages []provider.Message, model string) []provider.Message {
+	if l.Session == nil || l.ContextLookup == nil {
+		return messages
+	}
+	pct, err := l.Session.ContextPercent(ctx, l.ContextLookup)
+	if err != nil || pct < autoCompactThreshold {
+		return messages
+	}
+	if compacted, ok := l.compactMessages(ctx, messages, model); ok {
+		return compacted
+	}
+	return messages
+}
+
+// compactMessages runs the compact package's mechanism against messages,
+// resetting l.Session's tracker (if set) on success so its reported
+// percentage goes back to unset until the next DoneEvent repopulates it.
+// ok reports whether compaction actually condensed anything; on a false or
+// failed result the caller should keep using its own messages unchanged.
+func (l Loop) compactMessages(ctx context.Context, messages []provider.Message, model string) ([]provider.Message, bool) {
+	result, compacted, err := compact.Compact(ctx, l.Provider, model, messages, l.KeepRecentTurns)
+	if err != nil || !compacted {
+		return messages, false
+	}
+	if l.Session != nil {
+		l.Session.ResetContext()
+	}
+	return result, true
 }
 
 // backoffDelay returns l.Backoff's result if set, else defaultBackoff's.
