@@ -7,21 +7,43 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/provider/openrouter"
 )
 
+// version is set via ldflags (-X main.version=...) by GoReleaser. Plain
+// `go install` builds leave it at "dev", so versionString falls back to the
+// module version the Go toolchain embeds via debug.ReadBuildInfo.
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func versionString() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("liam", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	prompt := fs.String("p", "", "send a single prompt headlessly and exit")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	if *showVersion {
+		fmt.Fprintln(stdout, versionString())
+		return 0
 	}
 
 	if *prompt == "" {
