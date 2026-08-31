@@ -1,0 +1,11 @@
+---
+status: superseded by ADR-0004
+---
+
+# liam ships a permission-prompt system; pi.dev deliberately doesn't
+
+liam's spec ([issue #41](https://github.com/mgoodness/liam/issues/41)) ships a permission-prompt system in v1 (`manual`/`auto` modes, per-`SideEffect` defaults, `shell` always prompting even in `auto`). This is a deliberate divergence from pi.dev's own stated philosophy, not an oversight or an unconsidered gap.
+
+pi.dev ships **zero default protection**: no built-in sandbox, no permission prompts, no confirmation of any kind. Its `bash` tool "run[s] shell commands with the permissions of the pi process" — i.e. exactly as if the command were typed in the user's own terminal ([`docs/security.md:31-33`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/security.md)). Its own docs list "permission popups" among the things it intentionally omits ([`docs/usage.md:307-309`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/usage.md)), and state the reasoning directly: *"A partial in-process sandbox would be easy to misunderstand as a security boundary while still depending on the host shell, filesystem, package managers, credentials, and extension code. Real isolation needs to come from the operating system or a virtualization/container boundary."* pi.dev's one trust gate (project trust) only governs whether project-local settings/extensions/skills *load* — explicitly not tool execution: *"It is not a sandbox and it does not restrict what the model can ask tools to do after you start working in a directory."* (See [docs/research/pi-dev-architecture.md](../research/pi-dev-architecture.md) for the full primary-source citations.)
+
+liam's bet is the opposite: an in-process permission layer is worth building even though it isn't a hard OS/container-level security boundary, because most users want friction before a consequential action, not just before installing untrusted extension code. Neither position is "safer" in the abstract — pi.dev's own authors argue a partial in-process gate can be actively misleading — but liam's spec should be read as having consciously chosen the heavier-weight path, with pi.dev as primary-source evidence for the alternative, should this decision ever be revisited.

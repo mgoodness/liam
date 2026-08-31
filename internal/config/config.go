@@ -5,14 +5,13 @@ package config
 
 // Config is the fully merged configuration container.
 type Config struct {
-	Provider    ProviderConfig    `json:"provider"`
-	Theme       ThemeConfig       `json:"theme"`
-	Hooks       HooksConfig       `json:"hooks"`
-	MCPServers  MCPServersConfig  `json:"mcpServers"`
-	Skills      SkillsConfig      `json:"skills"`
-	Plugins     PluginsConfig     `json:"plugins"`
-	Permissions PermissionsConfig `json:"permissions"`
-	StatusLine  StatusLineConfig  `json:"statusLine"`
+	Provider   ProviderConfig   `json:"provider"`
+	Theme      ThemeConfig      `json:"theme"`
+	Hooks      HooksConfig      `json:"hooks"`
+	MCPServers MCPServersConfig `json:"mcpServers"`
+	Skills     SkillsConfig     `json:"skills"`
+	Plugins    PluginsConfig    `json:"plugins"`
+	StatusLine StatusLineConfig `json:"statusLine"`
 }
 
 // ProviderConfig configures the model provider.
@@ -36,9 +35,6 @@ type SkillsConfig struct{}
 
 // PluginsConfig is a stub, populated by a later ticket.
 type PluginsConfig struct{}
-
-// PermissionsConfig is a stub, populated by a later ticket.
-type PermissionsConfig struct{}
 
 // StatusLineConfig is a stub, populated by a later ticket.
 type StatusLineConfig struct{}
