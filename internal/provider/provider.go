@@ -27,8 +27,18 @@ type Request struct {
 type Message struct {
 	Role    string // "user" | "assistant" | "tool"
 	Content string
+	// ToolCalls is set on "assistant"-role messages that requested tool
+	// calls, so the full round trip (request, tool calls, results) can be
+	// replayed back to the provider on a later turn.
+	ToolCalls []ToolCall
 	// ToolCallID is set on "tool"-role messages carrying a result back in.
 	ToolCallID string
+}
+
+// ToolCall is one tool invocation the assistant requested, mirroring the
+// ToolCallEvent that produced it.
+type ToolCall struct {
+	ID, Name, ArgsJSON string
 }
 
 // ToolDef describes a tool the model may call, in provider-agnostic form.

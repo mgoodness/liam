@@ -41,7 +41,8 @@ func toChatMessage(m provider.Message) components.ChatMessages {
 	case "assistant":
 		content := components.CreateChatAssistantMessageContentStr(m.Content)
 		return components.CreateChatMessagesAssistant(components.ChatAssistantMessage{
-			Content: optionalnullable.From(&content),
+			Content:   optionalnullable.From(&content),
+			ToolCalls: toChatToolCalls(m.ToolCalls),
 		})
 	case "tool":
 		return components.CreateChatMessagesTool(components.ChatToolMessage{
@@ -53,6 +54,27 @@ func toChatMessage(m provider.Message) components.ChatMessages {
 			Content: components.CreateChatUserMessageContentStr(m.Content),
 		})
 	}
+}
+
+// toChatToolCalls reconstructs the tool_calls array OpenRouter's API
+// requires on an assistant message that requested tool calls, from the
+// provider.ToolCalls a prior turn accumulated onto that Message.
+func toChatToolCalls(calls []provider.ToolCall) []components.ChatToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]components.ChatToolCall, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, components.ChatToolCall{
+			ID:   c.ID,
+			Type: components.ChatToolCallTypeFunction,
+			Function: components.ChatToolCallFunction{
+				Name:      c.Name,
+				Arguments: c.ArgsJSON,
+			},
+		})
+	}
+	return out
 }
 
 func toChatTools(tools []provider.ToolDef) []components.ChatFunctionTool {

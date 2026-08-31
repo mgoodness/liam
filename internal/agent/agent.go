@@ -1,0 +1,123 @@
+// Package agent implements the agent loop: the core request/tool-call/
+// feedback cycle that sends a conversation to a Provider, dispatches any
+// requested tool calls to a registered Tool, and threads the results back
+// in, repeating until the model stops requesting tools.
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/mgoodness/liam/internal/provider"
+	"github.com/mgoodness/liam/internal/tool"
+)
+
+// Loop drives one or more Provider turns for a single user message,
+// dispatching tool calls against Tools until the model's turn produces no
+// further tool calls.
+type Loop struct {
+	Provider provider.Provider
+	Tools    tool.Registry
+}
+
+// Run sends req, dispatching any ToolCallEvents the Provider yields against
+// l.Tools and resending the conversation — including the assistant's
+// tool_calls and each tool's Result, threaded in as a matching "tool"-role
+// Message — until a turn produces no tool calls. Run derives the advertised
+// tool list from l.Tools itself, overriding whatever req.Tools holds.
+//
+// onEvent, when non-nil, is invoked for every provider.Event yielded across
+// every internal turn, letting a caller (TUI, headless) render streamed
+// text and tool-call/done bookkeeping without owning the dispatch loop.
+//
+// Run returns the full message history it built, including req.Messages
+// plus every assistant/tool message threaded in along the way.
+func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provider.Event)) ([]provider.Message, error) {
+	messages := append([]provider.Message(nil), req.Messages...)
+	tools := toolDefs(l.Tools)
+
+	for {
+		turnReq := req
+		turnReq.Messages = messages
+		turnReq.Tools = tools
+
+		var text strings.Builder
+		var calls []provider.ToolCall
+
+		for ev, err := range l.Provider.Stream(ctx, turnReq) {
+			if err != nil {
+				return messages, err
+			}
+			if onEvent != nil {
+				onEvent(ev)
+			}
+			switch e := ev.(type) {
+			case provider.TextDeltaEvent:
+				text.WriteString(e.Text)
+			case provider.ToolCallEvent:
+				calls = append(calls, provider.ToolCall{ID: e.ID, Name: e.Name, ArgsJSON: e.ArgsJSON})
+			}
+		}
+
+		if len(calls) == 0 {
+			if text.Len() > 0 {
+				messages = append(messages, provider.Message{Role: "assistant", Content: text.String()})
+			}
+			return messages, nil
+		}
+
+		messages = append(messages, provider.Message{
+			Role:      "assistant",
+			Content:   text.String(),
+			ToolCalls: calls,
+		})
+		for _, call := range calls {
+			result := l.dispatch(ctx, call)
+			messages = append(messages, provider.Message{
+				Role:       "tool",
+				Content:    result.Content,
+				ToolCallID: call.ID,
+			})
+		}
+	}
+}
+
+// dispatch runs the Tool named by call against l.Tools, reporting an error
+// Result for an unknown tool name or malformed argument JSON rather than
+// failing the loop — the model sees the failure and decides how to proceed.
+func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result {
+	t, ok := l.Tools[call.Name]
+	if !ok {
+		return tool.Result{Content: fmt.Sprintf("unknown tool %q", call.Name), IsError: true}
+	}
+
+	var args map[string]any
+	if call.ArgsJSON != "" {
+		if err := json.Unmarshal([]byte(call.ArgsJSON), &args); err != nil {
+			return tool.Result{Content: fmt.Sprintf("invalid arguments for %s: %v", call.Name, err), IsError: true}
+		}
+	}
+
+	return t.Run(ctx, args)
+}
+
+// toolDefs converts a tool.Registry into provider-agnostic ToolDefs, sorted
+// by name for deterministic output (map iteration order isn't stable).
+func toolDefs(reg tool.Registry) []provider.ToolDef {
+	if len(reg) == 0 {
+		return nil
+	}
+	out := make([]provider.ToolDef, 0, len(reg))
+	for _, t := range reg {
+		out = append(out, provider.ToolDef{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  map[string]any(t.Parameters()),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}

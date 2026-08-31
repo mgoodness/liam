@@ -84,6 +84,25 @@ func TestToChatMessageRoles(t *testing.T) {
 			},
 		},
 		{
+			name: "assistant with tool calls",
+			msg: provider.Message{
+				Role: "assistant",
+				ToolCalls: []provider.ToolCall{
+					{ID: "call_1", Name: "read", ArgsJSON: `{"path":"a"}`},
+				},
+			},
+			want: func(m components.ChatMessages) bool {
+				if m.ChatAssistantMessage == nil || len(m.ChatAssistantMessage.ToolCalls) != 1 {
+					return false
+				}
+				tc := m.ChatAssistantMessage.ToolCalls[0]
+				return tc.ID == "call_1" &&
+					tc.Type == components.ChatToolCallTypeFunction &&
+					tc.Function.Name == "read" &&
+					tc.Function.Arguments == `{"path":"a"}`
+			},
+		},
+		{
 			name: "unrecognized role falls back to user",
 			msg:  provider.Message{Role: "system", Content: "hi"},
 			want: func(m components.ChatMessages) bool {
@@ -99,6 +118,12 @@ func TestToChatMessageRoles(t *testing.T) {
 				t.Fatalf("toChatMessage(%+v) = %+v, did not match expectation", tc.msg, got)
 			}
 		})
+	}
+}
+
+func TestToChatToolCallsEmpty(t *testing.T) {
+	if got := toChatToolCalls(nil); got != nil {
+		t.Fatalf("toChatToolCalls(nil) = %v, want nil", got)
 	}
 }
 

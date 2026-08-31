@@ -9,9 +9,11 @@ import (
 	"os"
 	"runtime/debug"
 
+	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/provider/openrouter"
+	"github.com/mgoodness/liam/internal/tool"
 )
 
 // version is set via ldflags (-X main.version=...) by GoReleaser. Plain
@@ -72,19 +74,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	p := openrouter.New(apiKey)
 	req := buildRequest(cfg, *prompt)
+	loop := agent.Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}),
+	}
 
-	for ev, err := range p.Stream(context.Background(), req) {
-		if err != nil {
-			fmt.Fprintf(stderr, "liam: %v\n", err)
-			return 1
-		}
+	var wroteText bool
+	_, err = loop.Run(context.Background(), req, func(ev provider.Event) {
 		switch e := ev.(type) {
 		case provider.TextDeltaEvent:
 			fmt.Fprint(stdout, e.Text)
+			wroteText = true
 		case provider.DoneEvent:
-			fmt.Fprintln(stdout)
+			// One model= note per response (turn), per spec: auto-routing can
+			// pick a different model turn to turn. A tool-calls-only turn (no
+			// streamed text) skips the trailing blank line.
+			if wroteText {
+				fmt.Fprintln(stdout)
+				wroteText = false
+			}
 			fmt.Fprintf(stderr, "liam: model=%s\n", e.ModelUsed)
 		}
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "liam: %v\n", err)
+		return 1
 	}
 
 	return 0
