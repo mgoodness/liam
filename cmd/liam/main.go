@@ -79,12 +79,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Tools:    tool.NewRegistry(tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}),
 	}
 
+	var wroteText bool
 	_, err = loop.Run(context.Background(), req, func(ev provider.Event) {
 		switch e := ev.(type) {
 		case provider.TextDeltaEvent:
 			fmt.Fprint(stdout, e.Text)
+			wroteText = true
 		case provider.DoneEvent:
-			fmt.Fprintln(stdout)
+			// One model= note per response (turn), per spec: auto-routing can
+			// pick a different model turn to turn. A tool-calls-only turn (no
+			// streamed text) skips the trailing blank line.
+			if wroteText {
+				fmt.Fprintln(stdout)
+				wroteText = false
+			}
 			fmt.Fprintf(stderr, "liam: model=%s\n", e.ModelUsed)
 		}
 	})
