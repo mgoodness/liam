@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/OpenRouterTeam/go-sdk v0.7.97
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	golang.org/x/net v0.58.0
 )
 
 require (
