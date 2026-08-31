@@ -74,8 +74,15 @@ type Model struct {
 	themeMode string // cfg.Theme.Mode: "auto" (default), "dark", "light"
 	pal       theme.Palette
 
-	lines     []line
-	streaming strings.Builder // current turn's in-progress assistant text
+	lines []line
+	// streaming accumulates the current turn's in-progress assistant text.
+	// It must be a *strings.Builder, never a value: Model is copied by
+	// value on every single Update/View call (Bubbletea's Elm
+	// architecture, plus tea.Model interface boxing), and strings.Builder
+	// panics ("illegal use of non-zero Builder copied by value") the
+	// moment a write lands on a copy taken after an earlier write set its
+	// internal self-pointer — see TestStreamingSurvivesModelCopiedByValue.
+	streaming *strings.Builder
 
 	viewport     viewport.Model // scrolls the read-only transcript (issue #59)
 	followBottom bool           // true = auto-follow new content; false once a manual scroll has pinned the position
@@ -158,6 +165,7 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 		hist:         newHistory(),
 		viewport:     viewport.New(),
 		followBottom: true,
+		streaming:    &strings.Builder{},
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
