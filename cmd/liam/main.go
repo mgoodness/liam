@@ -143,7 +143,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	mcpLoader := mcp.Start(context.Background(), cfg.MCPServers)
 
 	if *prompt == "" {
-		return runInteractive(loop, mcpLoader, cfg, skills, projectInstructions, findSearcher, stdin, stdout, stderr)
+		deps := interactiveDeps{
+			loop:         loop,
+			mcpLoader:    mcpLoader,
+			cfg:          cfg,
+			skills:       skills,
+			systemPrompt: projectInstructions,
+			findSearcher: findSearcher,
+		}
+		return runInteractive(deps, stdin, stdout, stderr)
 	}
 	return runHeadless(loop, mcpLoader, cfg, *prompt, joinPrompt(projectInstructions, forceActivated), stdout, stderr)
 }
@@ -229,23 +237,39 @@ func findGrepSearchers(cwd string, stderr io.Writer) (tool.FindSearcher, tool.Gr
 	return fff, fff
 }
 
-// runInteractive launches liam's Bubbletea TUI. loop.Hooks' sessionEnd, if
-// set, is guaranteed to fire exactly once when p.Run() returns — a single
-// structural guarantee (matching runHeadless's own defer) rather than one
-// hand-threaded into every quit path inside the TUI itself, since
-// loop.Hooks is the same *hook.Runner the TUI's own New/handleKey/submit
-// share and keep pointed at whatever session is current (including across
-// /clear's session swap). mcpLoader is attached to the Model, waited on
-// (bounded by a timeout) and merged into the toolset on the session's
-// first turn only — see tui.Model.WithMCPLoader. systemPrompt (issue #56's
-// discovered AGENTS.md/LIAM.md instructions) is carried on every turn via
-// tui.Model.WithSystemPrompt. findSearcher backs the "@"-file-reference
-// autocomplete popup (issue #58) via tui.Model.WithFindSearcher — the same
-// searcher findGrepSearchers picked for the find/grep tools themselves.
-func runInteractive(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, skills []skill.Skill, systemPrompt string, findSearcher tool.FindSearcher, stdin io.Reader, stdout, stderr io.Writer) int {
-	m := tui.New(loop, cfg, skills).WithMCPLoader(mcpLoader).WithSystemPrompt(systemPrompt).WithFindSearcher(findSearcher)
-	if loop.Hooks != nil {
-		defer loop.Hooks.SessionEnd(context.Background())
+// interactiveDeps bundles runInteractive's TUI-construction dependencies,
+// kept separate from stdin/stdout/stderr (still plain io params, matching
+// runHeadless's own convention) so the two don't blur into one long,
+// same-shaped parameter list.
+type interactiveDeps struct {
+	loop         agent.Loop
+	mcpLoader    mcp.ToolLoader
+	cfg          config.Config
+	skills       []skill.Skill
+	systemPrompt string // issue #56's discovered AGENTS.md/LIAM.md instructions
+	findSearcher tool.FindSearcher
+}
+
+// runInteractive launches liam's Bubbletea TUI. deps.loop.Hooks' sessionEnd,
+// if set, is guaranteed to fire exactly once when p.Run() returns — a
+// single structural guarantee (matching runHeadless's own defer) rather
+// than one hand-threaded into every quit path inside the TUI itself, since
+// deps.loop.Hooks is the same *hook.Runner the TUI's own New/handleKey/
+// submit share and keep pointed at whatever session is current (including
+// across /clear's session swap). deps.mcpLoader is attached to the Model,
+// waited on (bounded by a timeout) and merged into the toolset on the
+// session's first turn only — see tui.Model.WithMCPLoader.
+// deps.systemPrompt is carried on every turn via tui.Model.WithSystemPrompt.
+// deps.findSearcher backs the "@"-file-reference autocomplete popup (issue
+// #58) via tui.Model.WithFindSearcher — the same searcher findGrepSearchers
+// picked for the find/grep tools themselves.
+func runInteractive(deps interactiveDeps, stdin io.Reader, stdout, stderr io.Writer) int {
+	m := tui.New(deps.loop, deps.cfg, deps.skills).
+		WithMCPLoader(deps.mcpLoader).
+		WithSystemPrompt(deps.systemPrompt).
+		WithFindSearcher(deps.findSearcher)
+	if deps.loop.Hooks != nil {
+		defer deps.loop.Hooks.SessionEnd(context.Background())
 	}
 	opts := []tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout)}
 	p := tea.NewProgram(m, opts...)
