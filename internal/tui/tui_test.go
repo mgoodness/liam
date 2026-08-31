@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image/color"
 	"iter"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,6 +13,7 @@ import (
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/provider"
+	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
 )
 
@@ -63,7 +65,7 @@ func TestSubmitStreamsResponseAndAppendsAssistantLine(t *testing.T) {
 			provider.DoneEvent{FinishReason: "stop", Usage: provider.Usage{CostUSD: 0.01}},
 		},
 	}}
-	m := New(agent.Loop{Provider: fp}, config.Config{})
+	m := New(agent.Loop{Provider: fp}, config.Config{}, nil)
 	m.input.SetValue("hi there")
 
 	next, cmd := m.submit()
@@ -107,7 +109,7 @@ func TestSubmitDispatchesToolCallAndRendersResultLine(t *testing.T) {
 			provider.DoneEvent{FinishReason: "stop"},
 		},
 	}}
-	m := New(agent.Loop{Provider: fp, Tools: tool.NewRegistry(ft)}, config.Config{})
+	m := New(agent.Loop{Provider: fp, Tools: tool.NewRegistry(ft)}, config.Config{}, nil)
 	m.input.SetValue("read foo")
 
 	next, cmd := m.submit()
@@ -133,7 +135,7 @@ func TestSubmitDispatchesToolCallAndRendersResultLine(t *testing.T) {
 }
 
 func TestSubmitSlashQuitReturnsQuitCmd(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{})
+	m := New(agent.Loop{}, config.Config{}, nil)
 	m.input.SetValue("/quit")
 
 	_, cmd := m.submit()
@@ -146,7 +148,7 @@ func TestSubmitSlashQuitReturnsQuitCmd(t *testing.T) {
 }
 
 func TestSubmitSlashClearResetsSessionAndLines(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{})
+	m := New(agent.Loop{}, config.Config{}, nil)
 	m.lines = []line{{role: "user", text: "old"}}
 	m.sess.Messages = []provider.Message{{Role: "user", Content: "old"}}
 	oldID := m.sess.ID
@@ -169,8 +171,41 @@ func TestSubmitSlashClearResetsSessionAndLines(t *testing.T) {
 	}
 }
 
+func TestSubmitSlashSkillsRendersCatalogAsInfoLine(t *testing.T) {
+	skills := []skill.Skill{
+		{Name: "commit-messages", Description: "Write conventional commit messages.", Scope: skill.ScopeUser},
+	}
+	m := New(agent.Loop{}, config.Config{}, skills)
+	m.input.SetValue("/skills")
+
+	next, cmd := m.submit()
+	mm := next.(Model)
+
+	if cmd != nil {
+		t.Error("submit(\"/skills\") returned a non-nil cmd, want nil (no turn started)")
+	}
+	if len(mm.lines) != 1 || mm.lines[0].role != "info" {
+		t.Fatalf("lines = %+v, want a single info line", mm.lines)
+	}
+	if !strings.Contains(mm.lines[0].text, "commit-messages") {
+		t.Errorf("lines[0].text = %q, want it to mention the discovered skill", mm.lines[0].text)
+	}
+}
+
+func TestSubmitSlashSkillsWithNoneDiscovered(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	m.input.SetValue("/skills")
+
+	next, _ := m.submit()
+	mm := next.(Model)
+
+	if len(mm.lines) != 1 || mm.lines[0].text != "No skills discovered." {
+		t.Fatalf("lines = %+v, want a single \"No skills discovered.\" info line", mm.lines)
+	}
+}
+
 func TestSubmitIgnoresEmptyInputAndInputWhileBusy(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{})
+	m := New(agent.Loop{}, config.Config{}, nil)
 
 	m.input.SetValue("   ")
 	if _, cmd := m.submit(); cmd != nil {
@@ -189,7 +224,7 @@ func TestSubmitIgnoresEmptyInputAndInputWhileBusy(t *testing.T) {
 }
 
 func TestCancelTurnCancelsContextWhenBusy(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{})
+	m := New(agent.Loop{}, config.Config{}, nil)
 	canceled := false
 	m.busy = true
 	m.cancel = func() { canceled = true }
@@ -202,7 +237,7 @@ func TestCancelTurnCancelsContextWhenBusy(t *testing.T) {
 }
 
 func TestCancelTurnNoOpWhenIdle(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{})
+	m := New(agent.Loop{}, config.Config{}, nil)
 	called := false
 	m.cancel = func() { called = true }
 
@@ -214,7 +249,7 @@ func TestCancelTurnNoOpWhenIdle(t *testing.T) {
 }
 
 func TestFinishTurnMarksInterruptedAndPreservesPartialOutput(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{})
+	m := New(agent.Loop{}, config.Config{}, nil)
 	m.busy = true
 	m.streaming.WriteString("partial ans")
 	partialMessages := []provider.Message{
@@ -242,7 +277,7 @@ func TestFinishTurnMarksInterruptedAndPreservesPartialOutput(t *testing.T) {
 }
 
 func TestFinishTurnMarksErrorForNonCancelFailures(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{})
+	m := New(agent.Loop{}, config.Config{}, nil)
 	m.busy = true
 
 	m.finishTurn(nil, errors.New("boom"))
@@ -253,7 +288,7 @@ func TestFinishTurnMarksErrorForNonCancelFailures(t *testing.T) {
 }
 
 func TestUpdateBackgroundColorMsgResolvesTheme(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}})
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil)
 
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
 	mm := next.(Model)
@@ -264,7 +299,7 @@ func TestUpdateBackgroundColorMsgResolvesTheme(t *testing.T) {
 }
 
 func TestNewAppliesThemeModeOverrideWithoutDetection(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "light"}})
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "light"}}, nil)
 	if m.pal.Dark {
 		t.Errorf("pal = %+v, want the light palette when theme.mode=light", m.pal)
 	}

@@ -109,7 +109,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	if *prompt == "" {
-		return runInteractive(loop, cfg, stdin, stdout, stderr)
+		return runInteractive(loop, cfg, skills, stdin, stdout, stderr)
 	}
 	return runHeadless(loop, cfg, *prompt, forceActivated, stdout, stderr)
 }
@@ -158,8 +158,8 @@ func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Re
 }
 
 // runInteractive launches liam's Bubbletea TUI.
-func runInteractive(loop agent.Loop, cfg config.Config, stdin io.Reader, stdout, stderr io.Writer) int {
-	m := tui.New(loop, cfg)
+func runInteractive(loop agent.Loop, cfg config.Config, skills []skill.Skill, stdin io.Reader, stdout, stderr io.Writer) int {
+	m := tui.New(loop, cfg, skills)
 	opts := []tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout)}
 	p := tea.NewProgram(m, opts...)
 	if _, err := p.Run(); err != nil {
