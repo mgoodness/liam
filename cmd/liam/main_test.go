@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mgoodness/liam/internal/config"
 )
 
 func TestRunRequiresPromptFlag(t *testing.T) {
@@ -31,6 +34,35 @@ func TestRunRequiresAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "OPENROUTER_API_KEY") {
 		t.Errorf("stderr = %q, want a mention of OPENROUTER_API_KEY", stderr.String())
+	}
+}
+
+// TestConfigFileModelReachesBuildRequest is the config system's own
+// end-to-end check (issue #43): a provider.model set in a project
+// liam.jsonc, loaded the same way run() loads it, changes the model
+// actually placed on the provider.Request that would be sent — not just the
+// parsed Config value.
+func TestConfigFileModelReachesBuildRequest(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	cwd := t.TempDir()
+	configPath := filepath.Join(cwd, "liam.jsonc")
+	content := []byte(`{
+  // pin a specific model instead of the ticket-1 hardcoded default
+  "provider": { "model": "openai/gpt-4o" }
+}`)
+	if err := os.WriteFile(configPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := config.Load(cwd, "")
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	req := buildRequest(cfg, "hello")
+	if req.Model != "openai/gpt-4o" {
+		t.Errorf("req.Model = %q, want %q", req.Model, "openai/gpt-4o")
 	}
 }
 
