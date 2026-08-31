@@ -38,7 +38,7 @@ func (Edit) Parameters() Schema {
 }
 
 func (Edit) Safety() Safety {
-	return Safety{SideEffect: SideEffectWrite, Permission: PermissionAllow}
+	return Safety{SideEffect: SideEffectWrite}
 }
 
 func (Edit) Run(_ context.Context, args map[string]any) Result {

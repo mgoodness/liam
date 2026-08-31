@@ -26,22 +26,12 @@ const (
 	SideEffectNetwork SideEffect = "network"
 )
 
-// Permission is the gating decision for a Tool call. The permission system
-// itself — config-driven policy per SideEffect/tool, interactive prompting —
-// is a later ticket; every built-in tool reports PermissionAllow as a no-op
-// default until that system exists.
-type Permission string
-
-const (
-	PermissionAllow  Permission = "allow"
-	PermissionPrompt Permission = "prompt"
-	PermissionDeny   Permission = "deny"
-)
-
-// Safety classifies a Tool's effect and the permission required to run it.
+// Safety classifies a Tool's effect. liam ships no built-in permission
+// system (see ADR-0004) — built-in tools run with the harness process's own
+// permissions; SideEffect exists for Trace's audit categorization, not for
+// gating.
 type Safety struct {
 	SideEffect SideEffect
-	Permission Permission
 }
 
 // Result is what a Tool's Run call reports back to the agent loop.

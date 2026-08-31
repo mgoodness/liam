@@ -7,7 +7,7 @@ import (
 )
 
 func TestReadSafety(t *testing.T) {
-	want := Safety{SideEffect: SideEffectRead, Permission: PermissionAllow}
+	want := Safety{SideEffect: SideEffectRead}
 	if got := (Read{}).Safety(); got != want {
 		t.Errorf("Safety() = %+v, want %+v", got, want)
 	}

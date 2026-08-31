@@ -30,7 +30,7 @@ func (Bash) Parameters() Schema {
 }
 
 func (Bash) Safety() Safety {
-	return Safety{SideEffect: SideEffectShell, Permission: PermissionAllow}
+	return Safety{SideEffect: SideEffectShell}
 }
 
 func (Bash) Run(ctx context.Context, args map[string]any) Result {

@@ -26,7 +26,7 @@ func (Read) Parameters() Schema {
 }
 
 func (Read) Safety() Safety {
-	return Safety{SideEffect: SideEffectRead, Permission: PermissionAllow}
+	return Safety{SideEffect: SideEffectRead}
 }
 
 func (Read) Run(_ context.Context, args map[string]any) Result {

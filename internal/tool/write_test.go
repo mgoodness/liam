@@ -7,7 +7,7 @@ import (
 )
 
 func TestWriteSafety(t *testing.T) {
-	want := Safety{SideEffect: SideEffectWrite, Permission: PermissionAllow}
+	want := Safety{SideEffect: SideEffectWrite}
 	if got := (Write{}).Safety(); got != want {
 		t.Errorf("Safety() = %+v, want %+v", got, want)
 	}

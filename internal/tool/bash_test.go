@@ -8,7 +8,7 @@ import (
 )
 
 func TestBashSafety(t *testing.T) {
-	want := Safety{SideEffect: SideEffectShell, Permission: PermissionAllow}
+	want := Safety{SideEffect: SideEffectShell}
 	if got := (Bash{}).Safety(); got != want {
 		t.Errorf("Safety() = %+v, want %+v", got, want)
 	}

@@ -55,7 +55,7 @@ func (f *fakeTool) Name() string            { return f.name }
 func (f *fakeTool) Description() string     { return "fake tool" }
 func (f *fakeTool) Parameters() tool.Schema { return tool.Schema{"type": "object"} }
 func (f *fakeTool) Safety() tool.Safety {
-	return tool.Safety{SideEffect: tool.SideEffectRead, Permission: tool.PermissionAllow}
+	return tool.Safety{SideEffect: tool.SideEffectRead}
 }
 func (f *fakeTool) Run(_ context.Context, args map[string]any) tool.Result {
 	f.gotArg = args
