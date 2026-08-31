@@ -49,6 +49,13 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 
 		for ev, err := range l.Provider.Stream(ctx, turnReq) {
 			if err != nil {
+				// Preserve whatever text this turn had already streamed
+				// (e.g. an Escape-cancelled turn) rather than discarding
+				// it — the caller marks the turn "[interrupted]"/"[error:
+				// ...]" around whatever partial output survives here.
+				if text.Len() > 0 {
+					messages = append(messages, provider.Message{Role: "assistant", Content: text.String()})
+				}
 				return messages, err
 			}
 			if onEvent != nil {
@@ -76,11 +83,29 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 		})
 		for _, call := range calls {
 			result := l.dispatch(ctx, call)
+			if onEvent != nil {
+				onEvent(provider.ToolResultEvent{
+					ID:       call.ID,
+					Name:     call.Name,
+					ArgsJSON: call.ArgsJSON,
+					Content:  result.Content,
+					IsError:  result.IsError,
+				})
+			}
 			messages = append(messages, provider.Message{
 				Role:       "tool",
 				Content:    result.Content,
 				ToolCallID: call.ID,
 			})
+		}
+
+		// A Tool.Run cancellation (e.g. Escape mid-command) surfaces here as
+		// ctx.Err(), not as a Stream error — check it now rather than
+		// looping back into a Provider.Stream call already doomed to fail,
+		// so cancellation during a tool call is detected at the moment it
+		// happens, same as cancellation during Stream itself.
+		if err := ctx.Err(); err != nil {
+			return messages, err
 		}
 	}
 }
