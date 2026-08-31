@@ -71,14 +71,19 @@ type Model struct {
 }
 
 // New builds the initial Model for an interactive session. skills is
-// liam's discovered skill catalog (nil if none), used by /skills.
+// liam's discovered skill catalog (nil if none), used by /skills. If
+// loop.Hooks is set, its SessionID is pointed at the new session and its
+// sessionStart hooks fire immediately.
 func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 	mode := cfg.Theme.Mode
+
+	sess := session.New()
+	startSession(loop, sess)
 
 	m := Model{
 		loop:      loop,
 		reqModel:  cfg.Provider.Model,
-		sess:      session.New(),
+		sess:      sess,
 		skills:    skills,
 		themeMode: mode,
 		// Assume dark until/unless auto-detection says otherwise — matches
@@ -88,6 +93,27 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
+}
+
+// startSession points loop.Hooks (if set) at sess and fires sessionStart.
+func startSession(loop agent.Loop, sess *session.Session) {
+	if loop.Hooks == nil {
+		return
+	}
+	loop.Hooks.SessionID = sess.ID
+	loop.Hooks.SessionStart(context.Background())
+}
+
+// endSession fires loop.Hooks' sessionEnd (if set) for the session it's
+// currently pointed at. Only /clear calls this directly — it's a genuine
+// mid-program session boundary; program exit's own sessionEnd is instead a
+// single structural guarantee in runInteractive (main.go), fired once after
+// p.Run() returns rather than threaded into every quit path here.
+func endSession(loop agent.Loop) {
+	if loop.Hooks == nil {
+		return
+	}
+	loop.Hooks.SessionEnd(context.Background())
 }
 
 func newTextarea() textarea.Model {
@@ -185,7 +211,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	case "/quit":
 		return m, tea.Quit
 	case "/clear":
+		endSession(m.loop)
 		m.sess.Clear()
+		startSession(m.loop, m.sess)
 		m.lines = nil
 		m.streaming.Reset()
 		return m, nil

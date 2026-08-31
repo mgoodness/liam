@@ -29,8 +29,33 @@ type ThemeConfig struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-// HooksConfig is a stub, populated by a later ticket.
-type HooksConfig struct{}
+// HooksConfig configures liam's 4 hook lifecycle points: sessionStart,
+// sessionEnd, beforeTool, afterTool. Each is an array of HookConfig entries,
+// run in declaration order.
+type HooksConfig struct {
+	SessionStart []HookConfig `json:"sessionStart,omitempty"`
+	SessionEnd   []HookConfig `json:"sessionEnd,omitempty"`
+	BeforeTool   []HookConfig `json:"beforeTool,omitempty"`
+	AfterTool    []HookConfig `json:"afterTool,omitempty"`
+}
+
+// HookConfig is one hook entry: a shell command run at its lifecycle point.
+type HookConfig struct {
+	// Command is run via "sh -c". Required.
+	Command string `json:"command"`
+	// Match restricts a beforeTool/afterTool hook to the named tools;
+	// "*" or an empty Match matches every tool. Ignored by sessionStart/
+	// sessionEnd, which have no associated tool.
+	Match []string `json:"match,omitempty"`
+	// TimeoutMs bounds how long the hook process may run before it's
+	// killed and treated as a fail-open timeout (ADR-0002). 0 means no
+	// timeout.
+	TimeoutMs int `json:"timeoutMs,omitempty"`
+	// Async fires the hook without waiting for it to finish, so it can
+	// never block the agent loop (or, for beforeTool, gate the call it
+	// wraps).
+	Async bool `json:"async,omitempty"`
+}
 
 // MCPServersConfig is a stub, populated by a later ticket.
 type MCPServersConfig struct{}

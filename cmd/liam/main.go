@@ -14,9 +14,11 @@ import (
 
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
+	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/provider/openrouter"
 	"github.com/mgoodness/liam/internal/render"
+	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
 	"github.com/mgoodness/liam/internal/tui"
@@ -103,9 +105,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if catalog := skill.ModelCatalog(skills); len(catalog) > 0 {
 		tools = append(tools, tool.ActivateSkill{Catalog: catalog})
 	}
+	hooks := &hook.Runner{
+		Hooks: cfg.Hooks,
+		Cwd:   cwd,
+		Warn:  func(msg string) { fmt.Fprintf(stderr, "liam: %s\n", msg) },
+	}
 	loop := agent.Loop{
 		Provider: p,
 		Tools:    tool.NewRegistry(tools...),
+		Hooks:    hooks,
 	}
 
 	if *prompt == "" {
@@ -157,9 +165,18 @@ func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Re
 	return skills, nil
 }
 
-// runInteractive launches liam's Bubbletea TUI.
+// runInteractive launches liam's Bubbletea TUI. loop.Hooks' sessionEnd, if
+// set, is guaranteed to fire exactly once when p.Run() returns — a single
+// structural guarantee (matching runHeadless's own defer) rather than one
+// hand-threaded into every quit path inside the TUI itself, since
+// loop.Hooks is the same *hook.Runner the TUI's own New/handleKey/submit
+// share and keep pointed at whatever session is current (including across
+// /clear's session swap).
 func runInteractive(loop agent.Loop, cfg config.Config, skills []skill.Skill, stdin io.Reader, stdout, stderr io.Writer) int {
 	m := tui.New(loop, cfg, skills)
+	if loop.Hooks != nil {
+		defer loop.Hooks.SessionEnd(context.Background())
+	}
 	opts := []tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout)}
 	p := tea.NewProgram(m, opts...)
 	if _, err := p.Run(); err != nil {
@@ -177,8 +194,15 @@ func runInteractive(loop agent.Loop, cfg config.Config, skills []skill.Skill, st
 func runHeadless(loop agent.Loop, cfg config.Config, prompt, forceActivatedSkill string, stdout, stderr io.Writer) int {
 	req := buildRequest(cfg, prompt, forceActivatedSkill)
 
+	ctx := context.Background()
+	if loop.Hooks != nil {
+		loop.Hooks.SessionID = session.New().ID
+		loop.Hooks.SessionStart(ctx)
+		defer loop.Hooks.SessionEnd(ctx)
+	}
+
 	var wroteText bool
-	_, err := loop.Run(context.Background(), req, func(ev provider.Event) {
+	_, err := loop.Run(ctx, req, func(ev provider.Event) {
 		switch e := ev.(type) {
 		case provider.TextDeltaEvent:
 			fmt.Fprint(stdout, e.Text)

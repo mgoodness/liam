@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/tool"
 )
@@ -21,6 +22,10 @@ import (
 type Loop struct {
 	Provider provider.Provider
 	Tools    tool.Registry
+	// Hooks, when non-nil, gates and observes every tool call via its
+	// BeforeTool/AfterTool lifecycle points (see hook.Runner). nil means no
+	// hooks are configured.
+	Hooks *hook.Runner
 }
 
 // Run sends req, dispatching any ToolCallEvents the Provider yields against
@@ -113,10 +118,19 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 // dispatch runs the Tool named by call against l.Tools, reporting an error
 // Result for an unknown tool name or malformed argument JSON rather than
 // failing the loop — the model sees the failure and decides how to proceed.
+// When l.Hooks is set, a blocking beforeTool hook can deny the call before
+// the Tool ever runs (its stderr becomes the error Result the model sees),
+// and afterTool hooks observe every call that does run.
 func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result {
 	t, ok := l.Tools[call.Name]
 	if !ok {
 		return tool.Result{Content: fmt.Sprintf("unknown tool %q", call.Name), IsError: true}
+	}
+
+	if l.Hooks != nil {
+		if d := l.Hooks.BeforeTool(ctx, call.Name, call.ArgsJSON); d.Blocked {
+			return tool.Result{Content: d.Reason, IsError: true}
+		}
 	}
 
 	var args map[string]any
@@ -126,7 +140,13 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 		}
 	}
 
-	return t.Run(ctx, args)
+	result := t.Run(ctx, args)
+
+	if l.Hooks != nil {
+		l.Hooks.AfterTool(ctx, call.Name, call.ArgsJSON, result.Content, result.IsError)
+	}
+
+	return result
 }
 
 // toolDefs converts a tool.Registry into provider-agnostic ToolDefs, sorted
