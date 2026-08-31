@@ -5,10 +5,17 @@
 // session commands wired to the agent loop's context.Context
 // cancellation.
 //
-// Conversation-viewport scrolling and the customizable statusLine are
-// later tickets (#59, #60) — this package renders the full transcript
-// top-aligned, un-scrolled, with no status block, matching the "Variant A"
-// prototype layout minus those two additions.
+// The customizable statusLine is a later ticket (#60) — this package
+// renders the full transcript with no status block, matching the
+// "Variant A" prototype layout minus that one addition.
+//
+// Conversation-viewport scrolling (issue #59) is backed by bubbles/
+// viewport: PageUp/PageDown/Ctrl+U/Ctrl+D and the mouse wheel call the
+// viewport's scroll methods directly rather than going through its own
+// default KeyMap, which binds j/k/h/l/Up/Down and would collide with
+// typing and input-history recall. The viewport auto-follows the bottom
+// as new content streams in; any other scroll pins the position, and End
+// resumes auto-follow.
 package tui
 
 import (
@@ -19,6 +26,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -68,6 +76,9 @@ type Model struct {
 
 	lines     []line
 	streaming strings.Builder // current turn's in-progress assistant text
+
+	viewport     viewport.Model // scrolls the read-only transcript (issue #59)
+	followBottom bool           // true = auto-follow new content; false once a manual scroll has pinned the position
 
 	input  textarea.Model
 	width  int
@@ -142,9 +153,11 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 		themeMode: mode,
 		// Assume dark until/unless auto-detection says otherwise — matches
 		// the spec's "default to dark (Frappe) on detection failure".
-		pal:   theme.Resolve(mode, true),
-		input: newTextarea(),
-		hist:  newHistory(),
+		pal:          theme.Resolve(mode, true),
+		input:        newTextarea(),
+		hist:         newHistory(),
+		viewport:     viewport.New(),
+		followBottom: true,
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
@@ -202,26 +215,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.SetWidth(m.width)
+		m.refreshViewport()
 		return m, nil
 
 	case tea.BackgroundColorMsg:
 		m.pal = theme.Resolve(m.themeMode, msg.IsDark())
 		applyTextareaTheme(&m.input, m.pal)
+		m.refreshViewport()
 		return m, nil
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
+	case tea.MouseWheelMsg:
+		m.syncViewportDims()
+		before := m.viewport.YOffset()
+		m.viewport, _ = m.viewport.Update(msg)
+		m.pinIfScrolled(before)
+		return m, nil
+
 	case streamMsg:
 		m.handleEvent(msg.ev)
+		m.refreshViewport()
 		return m, waitForMsg(m.events)
 
 	case turnDoneMsg:
 		m.finishTurn(msg.messages, msg.err)
+		m.refreshViewport()
 		return m, nil
 
 	case systemLineMsg:
 		m.lines = append(m.lines, line{role: "system", text: msg.text})
+		m.refreshViewport()
 		return m, waitForMsg(m.events)
 	}
 
@@ -265,6 +290,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleUp(msg)
 	case "down":
 		return m.handleDown(msg)
+	case "pgup":
+		m.scrollViewport(m.viewport.PageUp)
+		return m, nil
+	case "pgdown":
+		m.scrollViewport(m.viewport.PageDown)
+		return m, nil
+	case "ctrl+u":
+		m.scrollViewport(m.viewport.HalfPageUp)
+		return m, nil
+	case "ctrl+d":
+		m.scrollViewport(m.viewport.HalfPageDown)
+		return m, nil
+	case "end":
+		m.syncViewportDims()
+		m.viewport.GotoBottom()
+		m.followBottom = true
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -312,6 +354,59 @@ func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*
 	return cmd
 }
 
+// syncViewportDims recomputes the viewport's width/height from the
+// terminal size and the input's current row count. It's called before
+// every scroll action — not just on resize — because the textarea's height
+// changes as the user types multi-line input, and paging math (and the
+// AtBottom check scrollViewport relies on) needs to measure against the
+// layout currently on screen. The "-1" reserves the single blank
+// separator row baked into renderTranscript's trailing newline.
+func (m *Model) syncViewportDims() {
+	m.viewport.SetWidth(m.width)
+	m.viewport.SetHeight(max(0, m.height-m.input.Height()-1))
+}
+
+// refreshViewport rebuilds the viewport's content from the current
+// scrollback, first resyncing dimensions — the input's height (and so the
+// viewport's own height) can have changed since the last resize event, and
+// GotoBottom must land against the height actually on screen or the
+// transcript stops tracking the true last line. While auto-follow is
+// active (m.followBottom, the default) this also re-pins the view to the
+// bottom so streamed content stays visible; once a manual scroll has
+// pinned the position (m.followBottom == false), the offset is left alone
+// until End resumes auto-follow.
+func (m *Model) refreshViewport() {
+	m.syncViewportDims()
+	m.viewport.SetContent(m.renderTranscript())
+	if m.followBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
+// pinIfScrolled marks the position pinned (m.followBottom = false) only
+// when the viewport's offset actually moved from before — never on a
+// no-op scroll, such as PageDown pressed while already at the bottom, so
+// an accidental extra keypress can't spuriously break auto-follow. Once
+// pinned, only End (handleKey's own "end" case) resumes auto-follow —
+// scrolling back down to the same bottom row on its own does not.
+func (m *Model) pinIfScrolled(before int) {
+	if m.viewport.YOffset() != before {
+		m.followBottom = false
+	}
+}
+
+// scrollViewport re-syncs the viewport's dimensions, applies scroll, then
+// pins via pinIfScrolled — the shared shape behind every key-driven scroll
+// (PageUp/PageDown/Ctrl+U/Ctrl+D). The mouse wheel follows the same
+// sync-then-pin shape but is handled inline in Update, since it needs
+// viewport.Update(msg) rather than a bare method call.
+func (m *Model) scrollViewport(scroll func()) {
+	m.syncViewportDims()
+	before := m.viewport.YOffset()
+	scroll()
+	m.pinIfScrolled(before)
+}
+
 // cancelTurn cancels the in-flight turn's context, if there is one — the
 // single mechanism behind Escape-cancellation, unified across both a
 // Provider.Stream call and a Tool.Run call since both already thread the
@@ -342,14 +437,17 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		startSession(m.loop, m.sess)
 		m.lines = nil
 		m.streaming.Reset()
+		m.refreshViewport()
 		return m, nil
 	case "/skills":
 		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills)})
+		m.refreshViewport()
 		return m, nil
 	}
 
 	m.lines = append(m.lines, line{role: "user", text: text})
 	m.sess.Messages = append(m.sess.Messages, provider.Message{Role: "user", Content: text})
+	m.refreshViewport()
 
 	req := provider.Request{
 		Model:        m.reqModel,
@@ -456,11 +554,12 @@ func (m *Model) finishTurn(messages []provider.Message, err error) {
 	}
 }
 
-func (m Model) View() tea.View {
-	if m.width == 0 {
-		return tea.NewView("")
-	}
-
+// renderTranscript renders the full scrollback — every line plus any
+// in-progress streaming text — into a single palette-styled, width-clamped
+// string: the content refreshViewport feeds to m.viewport. Each appended
+// line ends in "\n", so the string always carries one trailing blank row;
+// that row is what separates the transcript from the input below it.
+func (m Model) renderTranscript() string {
 	var b strings.Builder
 	for _, l := range m.lines {
 		b.WriteString(renderLine(m.pal, l))
@@ -470,16 +569,20 @@ func (m Model) View() tea.View {
 		b.WriteString(renderLine(m.pal, line{role: "assistant", text: m.streaming.String()}))
 		b.WriteString("\n")
 	}
-	convo := b.String()
-	convoRows := strings.Count(convo, "\n")
-
-	canvas := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.pal.Text)).
 		Background(lipgloss.Color(m.pal.Base)).
 		Width(m.width).
-		Render(convo)
+		Render(b.String())
+}
 
-	content := canvas + "\n" + m.input.View()
+func (m Model) View() tea.View {
+	if m.width == 0 {
+		return tea.NewView("")
+	}
+
+	m.syncViewportDims()
+	content := m.viewport.View() + "\n" + m.input.View()
 	if m.mention.active {
 		content += "\n" + renderMentionPopup(m.pal, m.mention)
 	}
@@ -487,13 +590,14 @@ func (m Model) View() tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.BackgroundColor = lipgloss.Color(m.pal.Base)
-	// Offset the textarea's own cursor position by the number of rows the
-	// transcript above it occupies, plus the blank separator line. This
-	// doesn't account for line-wrapped rows (no width-aware wrapping yet —
-	// that's ticket #59's viewport work), so a very long unwrapped line can
-	// throw it off; harmless beyond a cosmetic cursor-position glitch.
+	v.MouseMode = tea.MouseModeCellMotion
+	// Offset the textarea's own cursor position by the viewport's fixed
+	// row count, plus the blank separator line. This doesn't account for
+	// line-wrapped rows (no width-aware wrapping yet), so a very long
+	// unwrapped line can throw it off; harmless beyond a cosmetic
+	// cursor-position glitch.
 	if cur := m.input.Cursor(); cur != nil {
-		v.Cursor = tea.NewCursor(cur.X, cur.Y+convoRows+1)
+		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1)
 	}
 	return v
 }
