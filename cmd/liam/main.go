@@ -143,7 +143,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	mcpLoader := mcp.Start(context.Background(), cfg.MCPServers)
 
 	if *prompt == "" {
-		return runInteractive(loop, mcpLoader, cfg, skills, projectInstructions, stdin, stdout, stderr)
+		return runInteractive(loop, mcpLoader, cfg, skills, projectInstructions, findSearcher, stdin, stdout, stderr)
 	}
 	return runHeadless(loop, mcpLoader, cfg, *prompt, joinPrompt(projectInstructions, forceActivated), stdout, stderr)
 }
@@ -239,9 +239,11 @@ func findGrepSearchers(cwd string, stderr io.Writer) (tool.FindSearcher, tool.Gr
 // (bounded by a timeout) and merged into the toolset on the session's
 // first turn only — see tui.Model.WithMCPLoader. systemPrompt (issue #56's
 // discovered AGENTS.md/LIAM.md instructions) is carried on every turn via
-// tui.Model.WithSystemPrompt.
-func runInteractive(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, skills []skill.Skill, systemPrompt string, stdin io.Reader, stdout, stderr io.Writer) int {
-	m := tui.New(loop, cfg, skills).WithMCPLoader(mcpLoader).WithSystemPrompt(systemPrompt)
+// tui.Model.WithSystemPrompt. findSearcher backs the "@"-file-reference
+// autocomplete popup (issue #58) via tui.Model.WithFindSearcher — the same
+// searcher findGrepSearchers picked for the find/grep tools themselves.
+func runInteractive(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, skills []skill.Skill, systemPrompt string, findSearcher tool.FindSearcher, stdin io.Reader, stdout, stderr io.Writer) int {
+	m := tui.New(loop, cfg, skills).WithMCPLoader(mcpLoader).WithSystemPrompt(systemPrompt).WithFindSearcher(findSearcher)
 	if loop.Hooks != nil {
 		defer loop.Hooks.SessionEnd(context.Background())
 	}

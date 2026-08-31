@@ -79,6 +79,10 @@ type Model struct {
 
 	mcpLoader    mcp.ToolLoader // set via WithMCPLoader; nil means no mcpServers configured
 	mcpAttempted bool           // guards waiting on mcpLoader to exactly the session's first turn
+
+	findSearcher tool.FindSearcher // set via WithFindSearcher; nil disables "@"-file-reference autocomplete
+	hist         history           // Up/Down input-recall stack (issue #58), session-only
+	mention      mentionState      // in-progress "@"-file-reference autocomplete, if any
 }
 
 // WithMCPLoader attaches loader, whose tools are waited for (bounded by
@@ -98,6 +102,16 @@ func (m Model) WithMCPLoader(loader mcp.ToolLoader) Model {
 // call) sends no SystemPrompt, matching every existing New(...) call site.
 func (m Model) WithSystemPrompt(prompt string) Model {
 	m.systemPrompt = prompt
+	return m
+}
+
+// WithFindSearcher attaches searcher, backing the "@"-file-reference
+// autocomplete popup (issue #58) with the same fff/stdlib-fallback searcher
+// the find tool itself uses. A zero-value Model (no WithFindSearcher call)
+// leaves it nil, disabling "@" autocomplete entirely — matching every
+// existing New(...) call site.
+func (m Model) WithFindSearcher(searcher tool.FindSearcher) Model {
+	m.findSearcher = searcher
 	return m
 }
 
@@ -130,6 +144,7 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 		// the spec's "default to dark (Frappe) on detection failure".
 		pal:   theme.Resolve(mode, true),
 		input: newTextarea(),
+		hist:  newHistory(),
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
@@ -215,7 +230,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handleKey dispatches one key press. While the "@"-file-reference popup
+// (m.mention) is active it owns Up/Down/Tab/Enter/Esc outright — history
+// recall and turn-cancellation are suspended until it closes. Otherwise
+// Up/Down are routed to history recall or ordinary cursor movement by
+// handleUp/handleDown, and every other key falls through to the textarea,
+// after which the mention state is recomputed from the new cursor position.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.mention.active {
+		switch msg.String() {
+		case "up":
+			m.mention.selected = (m.mention.selected - 1 + len(m.mention.matches)) % max(1, len(m.mention.matches))
+			return m, nil
+		case "down":
+			m.mention.selected = (m.mention.selected + 1) % max(1, len(m.mention.matches))
+			return m, nil
+		case "tab", "enter":
+			return m.selectMention(), nil
+		case "esc":
+			m.mention = mentionState{}
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -224,11 +261,55 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.submit()
+	case "up":
+		return m.handleUp(msg)
+	case "down":
+		return m.handleDown(msg)
 	}
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.updateMention()
 	return m, cmd
+}
+
+// handleUp recalls the previous history entry when the input is empty or
+// the cursor sits on the textarea's first line; otherwise it moves the
+// cursor up normally, the standard resolution to the conflict between
+// multi-line editing and history navigation (issue #58).
+func (m Model) handleUp(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	atBoundary := m.input.Value() == "" || m.input.Line() == 0
+	cmd := m.recallOrMove(msg, atBoundary, func(h *history) (string, bool) { return h.up(m.input.Value()) })
+	return m, cmd
+}
+
+// handleDown is handleUp's Down-key counterpart: it recalls the next-newer
+// history entry (or the preserved draft) when the input is empty or the
+// cursor sits on the textarea's last line; otherwise it moves the cursor
+// down normally.
+func (m Model) handleDown(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	atBoundary := m.input.Value() == "" || m.input.Line() == m.input.LineCount()-1
+	cmd := m.recallOrMove(msg, atBoundary, func(h *history) (string, bool) { return h.down() })
+	return m, cmd
+}
+
+// recallOrMove is handleUp/handleDown's shared boundary-check shape: at the
+// history-recall boundary it applies recall's result to the input (a no-op
+// when recall reports nothing to change), otherwise it forwards msg to the
+// textarea for ordinary cursor movement. Pointer receiver so the mutation
+// lands on the caller's own m, not a copy — recall closes over m.input to
+// read the pre-recall draft, which only holds if it's the same m handleUp/
+// handleDown go on to return.
+func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*history) (string, bool)) tea.Cmd {
+	if atBoundary {
+		if val, ok := recall(&m.hist); ok {
+			m.input.SetValue(val)
+		}
+		return nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
 }
 
 // cancelTurn cancels the in-flight turn's context, if there is one — the
@@ -250,6 +331,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.input.Reset()
+	m.hist.add(text)
 
 	switch text {
 	case "/quit":
@@ -398,6 +480,9 @@ func (m Model) View() tea.View {
 		Render(convo)
 
 	content := canvas + "\n" + m.input.View()
+	if m.mention.active {
+		content += "\n" + renderMentionPopup(m.pal, m.mention)
+	}
 
 	v := tea.NewView(content)
 	v.AltScreen = true
