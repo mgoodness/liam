@@ -8,12 +8,12 @@ import (
 )
 
 // Bash runs a shell command via "sh -c" and returns its combined stdout and
-// stderr.
+// stderr, truncated at outputCap bytes (ADR-0005).
 type Bash struct{}
 
 func (Bash) Name() string { return "bash" }
 func (Bash) Description() string {
-	return "Run a shell command and return its combined stdout and stderr."
+	return "Run a shell command and return its combined stdout and stderr. Output over ~8000 bytes is truncated."
 }
 
 func (Bash) Parameters() Schema {
@@ -45,7 +45,11 @@ func (Bash) Run(ctx context.Context, args map[string]any) Result {
 	cmd.Stderr = &out
 
 	if err := cmd.Run(); err != nil {
-		return Result{Content: fmt.Sprintf("%s\nerror: %v", out.String(), err), IsError: true}
+		// truncate() only the captured output, then always append the
+		// error diagnostic afterward — otherwise a command that both fails
+		// and produces huge output could have its "error: ..." line cut
+		// away entirely, leaving IsError true with no visible reason.
+		return Result{Content: fmt.Sprintf("%s\nerror: %v", truncate(out.String()), err), IsError: true}
 	}
-	return Result{Content: out.String()}
+	return Result{Content: truncate(out.String())}
 }

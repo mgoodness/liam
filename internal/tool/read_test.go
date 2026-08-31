@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,47 @@ func TestReadRun(t *testing.T) {
 	}
 	if got.Content != "hello world" {
 		t.Errorf("Content = %q, want %q", got.Content, "hello world")
+	}
+}
+
+// TestReadRunTruncatesLargeFile covers ADR-0005: read's file content is
+// capped at outputCap chars, matching web_fetch's own convention.
+func TestReadRunTruncatesLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	content := strings.Repeat("line of text\n", 1000) // well over outputCap
+	writeFile(t, path, content)
+
+	got := (Read{}).Run(context.Background(), map[string]any{"path": path})
+
+	if got.IsError {
+		t.Fatalf("Run() IsError = true, Content = %q", got.Content)
+	}
+	if len(got.Content) >= len(content) {
+		t.Errorf("Content len = %d, want truncated well under the raw %d-byte file", len(got.Content), len(content))
+	}
+	if !strings.Contains(got.Content, "truncated") {
+		t.Errorf("Content = %q, want a truncation marker", got.Content)
+	}
+}
+
+// TestReadRunAtCapReturnsUnchanged covers the exactly-at-cap boundary at
+// the tool level (not just truncate() in isolation, per issue #85's
+// acceptance criteria): a file of exactly outputCap bytes must come back
+// with no marker and no bytes dropped.
+func TestReadRunAtCapReturnsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exact.txt")
+	content := strings.Repeat("a", outputCap)
+	writeFile(t, path, content)
+
+	got := (Read{}).Run(context.Background(), map[string]any{"path": path})
+
+	if got.IsError {
+		t.Fatalf("Run() IsError = true, Content = %q", got.Content)
+	}
+	if got.Content != content {
+		t.Errorf("Content len = %d, want exactly outputCap (%d) bytes unchanged", len(got.Content), outputCap)
 	}
 }
 
