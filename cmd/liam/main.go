@@ -15,6 +15,7 @@ import (
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/hook"
+	"github.com/mgoodness/liam/internal/mcp"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/provider/openrouter"
 	"github.com/mgoodness/liam/internal/render"
@@ -116,10 +117,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Hooks:    hooks,
 	}
 
+	// MCP tool loading starts now, in the background — liam stays usable
+	// with built-in tools immediately; the first actual model call blocks
+	// on this (bounded by mcp.DefaultLoadTimeout) via mergeMCPTools.
+	mcpLoader := mcp.Start(context.Background(), cfg.MCPServers)
+
 	if *prompt == "" {
-		return runInteractive(loop, cfg, skills, stdin, stdout, stderr)
+		return runInteractive(loop, mcpLoader, cfg, skills, stdin, stdout, stderr)
 	}
-	return runHeadless(loop, cfg, *prompt, forceActivated, stdout, stderr)
+	return runHeadless(loop, mcpLoader, cfg, *prompt, forceActivated, stdout, stderr)
 }
 
 // discoverSkills builds liam's skill catalog for this run: user-scope
@@ -171,9 +177,11 @@ func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Re
 // hand-threaded into every quit path inside the TUI itself, since
 // loop.Hooks is the same *hook.Runner the TUI's own New/handleKey/submit
 // share and keep pointed at whatever session is current (including across
-// /clear's session swap).
-func runInteractive(loop agent.Loop, cfg config.Config, skills []skill.Skill, stdin io.Reader, stdout, stderr io.Writer) int {
-	m := tui.New(loop, cfg, skills)
+// /clear's session swap). mcpLoader is attached to the Model, waited on
+// (bounded by a timeout) and merged into the toolset on the session's
+// first turn only — see tui.Model.WithMCPLoader.
+func runInteractive(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, skills []skill.Skill, stdin io.Reader, stdout, stderr io.Writer) int {
+	m := tui.New(loop, cfg, skills).WithMCPLoader(mcpLoader)
 	if loop.Hooks != nil {
 		defer loop.Hooks.SessionEnd(context.Background())
 	}
@@ -190,11 +198,16 @@ func runInteractive(loop agent.Loop, cfg config.Config, skills []skill.Skill, st
 // assistant text and tool-call/result lines to stdout as they arrive, and
 // noting the actually-used model to stderr once per response.
 // forceActivatedSkill, when non-empty, is a force-activated skill's body
-// (via -skill), carried as the turn's SystemPrompt.
-func runHeadless(loop agent.Loop, cfg config.Config, prompt, forceActivatedSkill string, stdout, stderr io.Writer) int {
+// (via -skill), carried as the turn's SystemPrompt. mcpLoader's tools are
+// waited for and merged into loop.Tools before the turn runs — headless
+// mode has exactly one turn, so this trivially satisfies "the first actual
+// model call blocks on MCP load completion."
+func runHeadless(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, prompt, forceActivatedSkill string, stdout, stderr io.Writer) int {
 	req := buildRequest(cfg, prompt, forceActivatedSkill)
 
 	ctx := context.Background()
+	mcp.Merge(ctx, loop.Tools, mcpLoader, func(msg string) { fmt.Fprintf(stderr, "liam: %s\n", msg) })
+
 	if loop.Hooks != nil {
 		loop.Hooks.SessionID = session.New().ID
 		loop.Hooks.SessionStart(ctx)

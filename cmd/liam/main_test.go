@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"iter"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
+	"github.com/mgoodness/liam/internal/tool"
 )
 
 func TestRunRequiresAPIKey(t *testing.T) {
@@ -103,6 +105,120 @@ func TestRunInteractiveQuitFiresSessionEndHookExactlyOnce(t *testing.T) {
 	}
 }
 
+// fakeMCPTool is a minimal tool.Tool, standing in for a real MCP-sourced
+// tool in fakeLoader-driven tests.
+type fakeMCPTool struct{ name string }
+
+func (f fakeMCPTool) Name() string            { return f.name }
+func (f fakeMCPTool) Description() string     { return "fake mcp tool" }
+func (f fakeMCPTool) Parameters() tool.Schema { return tool.Schema{"type": "object"} }
+func (f fakeMCPTool) Safety() tool.Safety {
+	return tool.Safety{SideEffect: tool.SideEffectNetwork}
+}
+func (fakeMCPTool) Run(context.Context, map[string]any) tool.Result { return tool.Result{} }
+
+// fakeLoader implements mcpToolLoader without a real mcp.Loader, so tests
+// can script its Tools()/Errs() results directly.
+type fakeLoader struct {
+	tools    []tool.Tool
+	timedOut bool
+	errs     map[string]error
+}
+
+func (f *fakeLoader) Tools(context.Context, time.Duration) ([]tool.Tool, bool) {
+	return f.tools, f.timedOut
+}
+func (f *fakeLoader) Errs() map[string]error { return f.errs }
+
+// TestRunHeadlessMergesMCPToolsBeforeTheTurn covers issue #48's "registered
+// into liam's toolset as if they were built-in Tools" criterion reaching
+// the actual running harness: a tool the loader reports must be callable
+// by the model on the turn that follows.
+func TestRunHeadlessMergesMCPToolsBeforeTheTurn(t *testing.T) {
+	ft := fakeMCPTool{name: "mcp_tool"}
+	fp := &fakeProviderCallingTool{toolName: "mcp_tool"}
+	loop := agent.Loop{Provider: fp, Tools: tool.NewRegistry()}
+	loader := &fakeLoader{tools: []tool.Tool{ft}}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, loader, config.Config{}, "hi", "", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runHeadless() = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "mcp_tool") {
+		t.Errorf("stdout = %q, want a tool-call line for mcp_tool (proving it reached the registry)", stdout.String())
+	}
+}
+
+// TestRunHeadlessWarnsOnMCPLoadTimeout covers the "logging a warning on
+// timeout" criterion.
+func TestRunHeadlessWarnsOnMCPLoadTimeout(t *testing.T) {
+	loop := agent.Loop{Provider: doneProvider{}, Tools: tool.NewRegistry()}
+	loader := &fakeLoader{timedOut: true}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, loader, config.Config{}, "hi", "", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runHeadless() = %d, want 0", code)
+	}
+	if !strings.Contains(stderr.String(), "timed out") {
+		t.Errorf("stderr = %q, want a timeout warning", stderr.String())
+	}
+}
+
+// TestRunHeadlessWarnsOnMCPServerError covers a per-server load failure
+// (a connect/handshake/list-tools error, independent of timeout) reaching
+// the user.
+func TestRunHeadlessWarnsOnMCPServerError(t *testing.T) {
+	loop := agent.Loop{Provider: doneProvider{}, Tools: tool.NewRegistry()}
+	loader := &fakeLoader{errs: map[string]error{"bad-server": errors.New("connect refused")}}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, loader, config.Config{}, "hi", "", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runHeadless() = %d, want 0", code)
+	}
+	if !strings.Contains(stderr.String(), "bad-server") || !strings.Contains(stderr.String(), "connect refused") {
+		t.Errorf("stderr = %q, want a mention of the failing server and its error", stderr.String())
+	}
+}
+
+// TestRunHeadlessNilLoaderIsNoOp covers the "no mcpServers configured"
+// case: a nil loader must not panic or alter behavior.
+func TestRunHeadlessNilLoaderIsNoOp(t *testing.T) {
+	loop := agent.Loop{Provider: doneProvider{}, Tools: tool.NewRegistry()}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, nil, config.Config{}, "hi", "", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runHeadless() = %d, want 0; stderr = %q", code, stderr.String())
+	}
+}
+
+// fakeProviderCallingTool scripts exactly one turn that calls toolName,
+// then a final turn with no tool calls — enough to prove a tool actually
+// reached the registry the provider's tool list (and dispatch) sees.
+type fakeProviderCallingTool struct {
+	toolName string
+	calls    int
+}
+
+func (f *fakeProviderCallingTool) Name() string { return "fake" }
+func (f *fakeProviderCallingTool) Stream(_ context.Context, _ provider.Request) iter.Seq2[provider.Event, error] {
+	idx := f.calls
+	f.calls++
+	return func(yield func(provider.Event, error) bool) {
+		if idx == 0 {
+			if !yield(provider.ToolCallEvent{ID: "call_1", Name: f.toolName, ArgsJSON: `{}`}, nil) {
+				return
+			}
+			yield(provider.DoneEvent{FinishReason: "tool_calls"}, nil)
+			return
+		}
+		yield(provider.DoneEvent{FinishReason: "stop"}, nil)
+	}
+}
+
 // TestConfigFileModelReachesBuildRequest is the config system's own
 // end-to-end check (issue #43): a provider.model set in a project
 // liam.jsonc, loaded the same way run() loads it, changes the model
@@ -168,7 +284,7 @@ func TestRunHeadlessFiresSessionStartAndSessionEndHooks(t *testing.T) {
 	loop := agent.Loop{Provider: doneProvider{}, Hooks: hooks}
 
 	var stdout, stderr bytes.Buffer
-	code := runHeadless(loop, config.Config{}, "hi", "", &stdout, &stderr)
+	code := runHeadless(loop, nil, config.Config{}, "hi", "", &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("runHeadless() = %d, want 0; stderr = %q", code, stderr.String())
 	}
