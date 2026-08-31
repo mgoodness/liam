@@ -103,7 +103,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	p := openrouter.New(apiKey)
 	findSearcher, grepSearcher := findGrepSearchers(cwd, stderr)
-	tools := []tool.Tool{tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}, tool.Find{Searcher: findSearcher}, tool.Grep{Searcher: grepSearcher}}
+	tools := []tool.Tool{tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}, tool.Find{Searcher: findSearcher}, tool.Grep{Searcher: grepSearcher}, tool.WebFetch{}}
+	// web_search is silently unregistered when EXA_API_KEY is unset
+	// (issue #50's spec), rather than erroring like OPENROUTER_API_KEY's
+	// absence above — Exa is an optional dependency, not liam's core
+	// model-calling path.
+	if exaKey := os.Getenv("EXA_API_KEY"); exaKey != "" {
+		tools = append(tools, tool.WebSearch{APIKey: exaKey})
+	}
 	if catalog := skill.ModelCatalog(skills); len(catalog) > 0 {
 		tools = append(tools, tool.ActivateSkill{Catalog: catalog})
 	}
