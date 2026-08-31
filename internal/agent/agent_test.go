@@ -6,6 +6,7 @@ import (
 	"iter"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/hook"
@@ -15,12 +16,16 @@ import (
 )
 
 // fakeProvider scripts one []provider.Event per call to Stream, in call
-// order — turn N of a multi-turn agent loop gets turns[N]. It also records
-// every Request it was called with, so tests can assert on how the loop
-// threaded history back in.
+// order — call N of a multi-attempt/multi-turn agent loop gets turns[N]
+// (each retry attempt is its own Stream call, indexed the same way as a
+// distinct turn). errs, indexed the same way, optionally yields an error
+// after that call's events — e.g. a scripted *provider.ProviderError to
+// drive the retry policy, or a plain error for a non-retryable failure. It
+// also records every Request it was called with, so tests can assert on
+// how Run threaded history back in, and how many attempts it made.
 type fakeProvider struct {
 	turns [][]provider.Event
-	err   error // returned (once, on the final scripted turn) instead of a normal finish, if set
+	errs  []error
 
 	requests []provider.Request
 }
@@ -32,17 +37,19 @@ func (f *fakeProvider) Stream(_ context.Context, req provider.Request) iter.Seq2
 	f.requests = append(f.requests, req)
 
 	return func(yield func(provider.Event, error) bool) {
-		if idx >= len(f.turns) {
+		if idx >= len(f.turns) && idx >= len(f.errs) {
 			yield(nil, errors.New("fakeProvider: no scripted turn for this call"))
 			return
 		}
-		for _, ev := range f.turns[idx] {
-			if !yield(ev, nil) {
-				return
+		if idx < len(f.turns) {
+			for _, ev := range f.turns[idx] {
+				if !yield(ev, nil) {
+					return
+				}
 			}
 		}
-		if f.err != nil && idx == len(f.turns)-1 {
-			yield(nil, f.err)
+		if idx < len(f.errs) && f.errs[idx] != nil {
+			yield(nil, f.errs[idx])
 		}
 	}
 }
@@ -233,7 +240,7 @@ func TestRunPropagatesProviderError(t *testing.T) {
 	wantErr := errors.New("boom")
 	fp := &fakeProvider{
 		turns: [][]provider.Event{{provider.TextDeltaEvent{Text: "partial"}}},
-		err:   wantErr,
+		errs:  []error{wantErr},
 	}
 	l := Loop{Provider: fp}
 
@@ -348,7 +355,7 @@ func TestRunPreservesPartialTextOnStreamError(t *testing.T) {
 	wantErr := errors.New("boom")
 	fp := &fakeProvider{
 		turns: [][]provider.Event{{provider.TextDeltaEvent{Text: "partial"}}},
-		err:   wantErr,
+		errs:  []error{wantErr},
 	}
 	l := Loop{Provider: fp}
 
@@ -548,5 +555,107 @@ func TestRunReturnsImmediatelyWhenCanceledDuringToolRun(t *testing.T) {
 	}
 	if toolMsg == nil || toolMsg.Content != "killed" {
 		t.Fatalf("messages = %+v, want the tool's result preserved", got)
+	}
+}
+
+// TestRunRetriesRetryableProviderErrorThenSucceeds drives issue #51's retry
+// policy: a RateLimited ProviderError on the first attempt auto-retries,
+// invisibly to the model — the conversation ends up with only the
+// successful retry's assistant message, no trace of the failed attempt.
+func TestRunRetriesRetryableProviderErrorThenSucceeds(t *testing.T) {
+	fp := &fakeProvider{
+		turns: [][]provider.Event{
+			nil,
+			{
+				provider.TextDeltaEvent{Text: "hello"},
+				provider.DoneEvent{FinishReason: "stop"},
+			},
+		},
+		errs: []error{
+			&provider.ProviderError{Kind: provider.ErrorKindRateLimited, Cause: errors.New("rate limited")},
+		},
+	}
+	l := Loop{Provider: fp, Backoff: func(int) time.Duration { return 0 }}
+
+	req := provider.Request{Messages: []provider.Message{{Role: "user", Content: "hi"}}}
+	got, err := l.Run(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(fp.requests) != 2 {
+		t.Fatalf("Provider.Stream called %d times, want 2 (1 failed attempt + 1 retry)", len(fp.requests))
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(messages) = %d, want 2 (user + the retry's assistant message only): %+v", len(got), got)
+	}
+	if got[1].Role != "assistant" || got[1].Content != "hello" {
+		t.Errorf("messages[1] = %+v, want assistant %q", got[1], "hello")
+	}
+}
+
+// TestRunRetriesUpToMaxAttemptsThenFails covers a RateLimited/Unavailable
+// error that never clears: the loop retries up to maxStreamAttempts total
+// attempts, then surfaces the final failure.
+func TestRunRetriesUpToMaxAttemptsThenFails(t *testing.T) {
+	wantErr := &provider.ProviderError{Kind: provider.ErrorKindUnavailable, Cause: errors.New("down")}
+	fp := &fakeProvider{errs: []error{wantErr, wantErr, wantErr}}
+	l := Loop{Provider: fp, Backoff: func(int) time.Duration { return 0 }}
+
+	_, err := l.Run(context.Background(), provider.Request{}, nil)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run() error = %v, want %v", err, wantErr)
+	}
+	if len(fp.requests) != maxStreamAttempts {
+		t.Fatalf("Provider.Stream called %d times, want %d (max attempts)", len(fp.requests), maxStreamAttempts)
+	}
+}
+
+// TestRunDoesNotRetryNonRetryableProviderErrorKinds covers the policy's
+// other branch: InvalidRequest and Unknown surface immediately by spec, and
+// ContextTooLong is treated the same way for now (issue #51) pending ticket
+// 13's compaction hook.
+func TestRunDoesNotRetryNonRetryableProviderErrorKinds(t *testing.T) {
+	kinds := []provider.ErrorKind{
+		provider.ErrorKindInvalidRequest,
+		provider.ErrorKindUnknown,
+		provider.ErrorKindContextTooLong,
+	}
+	for _, kind := range kinds {
+		t.Run(string(kind), func(t *testing.T) {
+			wantErr := &provider.ProviderError{Kind: kind, Cause: errors.New("boom")}
+			fp := &fakeProvider{errs: []error{wantErr}}
+			l := Loop{Provider: fp, Backoff: func(int) time.Duration { return 0 }}
+
+			_, err := l.Run(context.Background(), provider.Request{}, nil)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("Run() error = %v, want %v", err, wantErr)
+			}
+			if len(fp.requests) != 1 {
+				t.Fatalf("Provider.Stream called %d times, want 1 (no retry for Kind=%s)", len(fp.requests), kind)
+			}
+		})
+	}
+}
+
+// TestRunRetryBackoffCanceledReturnsContextCanceled covers Escape-cancellation
+// while a retry is waiting on backoff: the wait must abort immediately
+// rather than sleeping out its full delay.
+func TestRunRetryBackoffCanceledReturnsContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	fp := &fakeProvider{
+		errs: []error{&provider.ProviderError{Kind: provider.ErrorKindRateLimited, Cause: errors.New("rate limited")}},
+	}
+	l := Loop{Provider: fp, Backoff: func(int) time.Duration {
+		cancel()
+		// Long enough that the test would hang if cancellation weren't honored.
+		return time.Hour
+	}}
+
+	_, err := l.Run(ctx, provider.Request{}, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if len(fp.requests) != 1 {
+		t.Fatalf("Provider.Stream called %d times, want 1 (canceled during backoff, before the retry attempt)", len(fp.requests))
 	}
 }

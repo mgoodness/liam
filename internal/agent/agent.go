@@ -7,13 +7,32 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/tool"
+)
+
+// maxStreamAttempts is the total number of times a single turn's
+// Provider.Stream call is attempted (the initial attempt plus up to 2
+// retries) before a retryable error is surfaced as a final failure.
+const maxStreamAttempts = 3
+
+// retryBaseDelay and retryMaxDelay bound the hand-rolled exponential
+// backoff between retry attempts: attempt N waits roughly
+// min(retryBaseDelay*2^(N-1), retryMaxDelay), jittered. retryMaxDelay is a
+// safety cap rather than a delay this reaches in practice: with
+// maxStreamAttempts capped at 3, only 2 retry waits ever happen (attempt 1
+// then attempt 2), landing in roughly the 0.5s-2s band.
+const (
+	retryBaseDelay = 1 * time.Second
+	retryMaxDelay  = 10 * time.Second
 )
 
 // Loop drives one or more Provider turns for a single user message,
@@ -26,6 +45,11 @@ type Loop struct {
 	// BeforeTool/AfterTool lifecycle points (see hook.Runner). nil means no
 	// hooks are configured.
 	Hooks *hook.Runner
+	// Backoff computes the delay before the retry attempt that follows a
+	// failed attempt numbered attempt (1-indexed). nil uses
+	// defaultBackoff, the real jittered exponential backoff; tests override
+	// it to avoid real sleeps.
+	Backoff func(attempt int) time.Duration
 }
 
 // Run sends req, dispatching any ToolCallEvents the Provider yields against
@@ -49,41 +73,29 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 		turnReq.Messages = messages
 		turnReq.Tools = tools
 
-		var text strings.Builder
-		var calls []provider.ToolCall
-
-		for ev, err := range l.Provider.Stream(ctx, turnReq) {
-			if err != nil {
-				// Preserve whatever text this turn had already streamed
-				// (e.g. an Escape-cancelled turn) rather than discarding
-				// it — the caller marks the turn "[interrupted]"/"[error:
-				// ...]" around whatever partial output survives here.
-				if text.Len() > 0 {
-					messages = append(messages, provider.Message{Role: "assistant", Content: text.String()})
-				}
-				return messages, err
+		text, calls, err := l.streamTurn(ctx, turnReq, onEvent)
+		if err != nil {
+			// Preserve whatever text the failing (non-retried) attempt had
+			// already streamed — e.g. an Escape-cancelled turn — rather than
+			// discarding it; the caller marks the turn
+			// "[interrupted]"/"[error: ...]" around whatever partial output
+			// survives here.
+			if text != "" {
+				messages = append(messages, provider.Message{Role: "assistant", Content: text})
 			}
-			if onEvent != nil {
-				onEvent(ev)
-			}
-			switch e := ev.(type) {
-			case provider.TextDeltaEvent:
-				text.WriteString(e.Text)
-			case provider.ToolCallEvent:
-				calls = append(calls, provider.ToolCall{ID: e.ID, Name: e.Name, ArgsJSON: e.ArgsJSON})
-			}
+			return messages, err
 		}
 
 		if len(calls) == 0 {
-			if text.Len() > 0 {
-				messages = append(messages, provider.Message{Role: "assistant", Content: text.String()})
+			if text != "" {
+				messages = append(messages, provider.Message{Role: "assistant", Content: text})
 			}
 			return messages, nil
 		}
 
 		messages = append(messages, provider.Message{
 			Role:      "assistant",
-			Content:   text.String(),
+			Content:   text,
 			ToolCalls: calls,
 		})
 		for _, call := range calls {
@@ -147,6 +159,110 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 	}
 
 	return result
+}
+
+// streamTurn drives one or more Provider.Stream attempts for a single turn,
+// applying the ProviderError.Kind-based retry policy: RateLimited and
+// Unavailable auto-retry with jittered exponential backoff (up to
+// maxStreamAttempts total attempts); every other Kind — including
+// ContextTooLong, which ticket 13 (compaction) will change to compact and
+// retry once instead — surfaces on the first attempt, like a
+// non-ProviderError or an unclassified error would. Retries are invisible
+// to the model: a failed attempt's accumulated text/calls are discarded and
+// a fresh attempt starts, so only the eventual success or final failure is
+// ever threaded into the conversation. onEvent still fires live as each
+// attempt streams; a retried attempt is expected to fail before yielding
+// any events in practice (a provider-level retryable error surfaces before
+// any content), so this doesn't visibly leak a retried attempt's output.
+func (l Loop) streamTurn(ctx context.Context, req provider.Request, onEvent func(provider.Event)) (string, []provider.ToolCall, error) {
+	for attempt := 1; ; attempt++ {
+		var text strings.Builder
+		var calls []provider.ToolCall
+		var streamErr error
+
+		for ev, err := range l.Provider.Stream(ctx, req) {
+			if err != nil {
+				streamErr = err
+				break
+			}
+			if onEvent != nil {
+				onEvent(ev)
+			}
+			switch e := ev.(type) {
+			case provider.TextDeltaEvent:
+				text.WriteString(e.Text)
+			case provider.ToolCallEvent:
+				calls = append(calls, provider.ToolCall{ID: e.ID, Name: e.Name, ArgsJSON: e.ArgsJSON})
+			}
+		}
+
+		if streamErr == nil {
+			return text.String(), calls, nil
+		}
+		if attempt >= maxStreamAttempts || !isRetryable(streamErr) {
+			return text.String(), calls, streamErr
+		}
+		if err := waitBackoff(ctx, l.backoffDelay(attempt)); err != nil {
+			return text.String(), calls, err
+		}
+	}
+}
+
+// isRetryable reports whether err is a *provider.ProviderError whose Kind
+// the retry policy auto-retries.
+func isRetryable(err error) bool {
+	var perr *provider.ProviderError
+	if !errors.As(err, &perr) {
+		return false
+	}
+	switch perr.Kind {
+	case provider.ErrorKindRateLimited, provider.ErrorKindUnavailable:
+		return true
+	case provider.ErrorKindContextTooLong:
+		// Ticket 13 (compaction) is this case's extension point: it'll
+		// change this to compact the conversation and retry once instead
+		// of returning false. For now (ticket 51), treated like Unknown —
+		// surface immediately.
+		return false
+	default:
+		return false
+	}
+}
+
+// backoffDelay returns l.Backoff's result if set, else defaultBackoff's.
+func (l Loop) backoffDelay(attempt int) time.Duration {
+	if l.Backoff != nil {
+		return l.Backoff(attempt)
+	}
+	return defaultBackoff(attempt)
+}
+
+// defaultBackoff computes attempt's hand-rolled exponential backoff delay:
+// retryBaseDelay*2^(attempt-1), capped at retryMaxDelay, jittered to a
+// random value in [delay/2, delay].
+func defaultBackoff(attempt int) time.Duration {
+	d := retryBaseDelay * time.Duration(1<<uint(attempt-1))
+	if d > retryMaxDelay {
+		d = retryMaxDelay
+	}
+	half := d / 2
+	return half + time.Duration(rand.Int63n(int64(d-half+1)))
+}
+
+// waitBackoff sleeps for d, returning early with ctx.Err() if ctx is
+// canceled first (e.g. Escape mid-backoff).
+func waitBackoff(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // toolDefs converts a tool.Registry into provider-agnostic ToolDefs, sorted
