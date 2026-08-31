@@ -97,6 +97,40 @@ func TestSubmitStreamsResponseAndAppendsAssistantLine(t *testing.T) {
 	}
 }
 
+// capturingProvider records the last Request it received and immediately
+// completes with a DoneEvent — enough to inspect what submit() built
+// without needing to script any streamed content.
+type capturingProvider struct {
+	lastReq provider.Request
+}
+
+func (f *capturingProvider) Name() string { return "fake-capturing" }
+
+func (f *capturingProvider) Stream(_ context.Context, req provider.Request) iter.Seq2[provider.Event, error] {
+	f.lastReq = req
+	return func(yield func(provider.Event, error) bool) {
+		yield(provider.DoneEvent{FinishReason: "stop"}, nil)
+	}
+}
+
+// TestSubmitThreadsSystemPromptFromWithSystemPrompt covers issue #56's
+// wiring into the TUI: whatever WithSystemPrompt attached at New(...) time
+// (the discovered AGENTS.md/LIAM.md project instructions) must ride along
+// on every submitted turn's Request.SystemPrompt.
+func TestSubmitThreadsSystemPromptFromWithSystemPrompt(t *testing.T) {
+	fp := &capturingProvider{}
+	m := New(agent.Loop{Provider: fp}, config.Config{}, nil).WithSystemPrompt("project instructions")
+	m.input.SetValue("hi")
+
+	next, cmd := m.submit()
+	mm := next.(Model)
+	drain(t, mm, cmd)
+
+	if fp.lastReq.SystemPrompt != "project instructions" {
+		t.Errorf("req.SystemPrompt = %q, want %q", fp.lastReq.SystemPrompt, "project instructions")
+	}
+}
+
 func TestSubmitDispatchesToolCallAndRendersResultLine(t *testing.T) {
 	ft := &fakeTool{name: "read", result: tool.Result{Content: "file content"}}
 	fp := &multiCallProvider{turns: [][]provider.Event{
