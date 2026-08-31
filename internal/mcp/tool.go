@@ -42,19 +42,27 @@ func (t *mcpTool) Safety() tool.Safety {
 }
 
 // Run calls the tool through its originating session, concatenating any
-// TextContent blocks in the result (liam's tool results are plain text;
-// non-text content kinds, e.g. images, are silently dropped for v1).
+// TextContent blocks in the result via textContent (liam's tool results
+// are plain text; non-text content kinds, e.g. images, are silently
+// dropped for v1).
 func (t *mcpTool) Run(ctx context.Context, args map[string]any) tool.Result {
 	res, err := t.session.CallTool(ctx, &sdkmcp.CallToolParams{Name: t.def.Name, Arguments: args})
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("mcp: calling %s (%s): %v", t.def.Name, t.serverName, err), IsError: true}
 	}
 
+	return tool.Result{Content: textContent(res.Content), IsError: res.IsError}
+}
+
+// textContent concatenates every TextContent block in content — the
+// shared plain-text-only convention mcpTool.Run and FFF.call (fff.go)
+// both rely on.
+func textContent(content []sdkmcp.Content) string {
 	var sb strings.Builder
-	for _, c := range res.Content {
+	for _, c := range content {
 		if tc, ok := c.(*sdkmcp.TextContent); ok {
 			sb.WriteString(tc.Text)
 		}
 	}
-	return tool.Result{Content: sb.String(), IsError: res.IsError}
+	return sb.String()
 }

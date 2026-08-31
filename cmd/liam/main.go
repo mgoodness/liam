@@ -102,7 +102,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	p := openrouter.New(apiKey)
-	tools := []tool.Tool{tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}}
+	findSearcher, grepSearcher := findGrepSearchers(cwd, stderr)
+	tools := []tool.Tool{tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}, tool.Find{Searcher: findSearcher}, tool.Grep{Searcher: grepSearcher}}
 	if catalog := skill.ModelCatalog(skills); len(catalog) > 0 {
 		tools = append(tools, tool.ActivateSkill{Catalog: catalog})
 	}
@@ -169,6 +170,28 @@ func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Re
 		fmt.Fprintf(stderr, "liam: skill: %s: %s\n", d.Path, d.Message)
 	}
 	return skills, nil
+}
+
+// findGrepSearchers picks find/grep's searcher (ticket #49): fff-mcp, via
+// an internal, non-user-visible MCP connection rooted at cwd, when the
+// fff-mcp binary is on $PATH, otherwise tool.StdlibSearch. Auto-detected
+// once at startup, not a config toggle — the active searcher is logged to
+// stderr either way (ticket #18's resolution).
+func findGrepSearchers(cwd string, stderr io.Writer) (tool.FindSearcher, tool.GrepSearcher) {
+	stdlib := tool.StdlibSearch{Dir: cwd}
+	if !mcp.DetectFFF() {
+		fmt.Fprintln(stderr, "liam: find/grep searcher=stdlib (fff-mcp not found on $PATH)")
+		return stdlib, stdlib
+	}
+
+	fff, err := mcp.StartFFF(context.Background(), cwd)
+	if err != nil {
+		fmt.Fprintf(stderr, "liam: find/grep searcher=stdlib (fff-mcp: %v)\n", err)
+		return stdlib, stdlib
+	}
+
+	fmt.Fprintln(stderr, "liam: find/grep searcher=fff-mcp")
+	return fff, fff
 }
 
 // runInteractive launches liam's Bubbletea TUI. loop.Hooks' sessionEnd, if

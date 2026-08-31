@@ -1,0 +1,8 @@
+Found 3 matches
+
+a.go
+Line 3: foo bar
+Line 5: baz foo
+
+sub/b.go
+Line 3: func foo() {}
