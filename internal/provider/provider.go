@@ -61,6 +61,20 @@ type ToolCallEvent struct{ ID, Name, ArgsJSON string }
 
 func (ToolCallEvent) isEvent() {}
 
+// ToolResultEvent reports one dispatched tool call's outcome. Unlike the
+// other Event variants, it's synthesized by the agent loop itself after
+// running a Tool, not emitted by a Provider — it shares the Event sum type
+// so a single onEvent seam can render both streamed model output and tool
+// results (the plain-text "name(args) → result" convention used by
+// headless mode and the TUI's inline tool-call rendering).
+type ToolResultEvent struct {
+	ID, Name, ArgsJSON string
+	Content            string
+	IsError            bool
+}
+
+func (ToolResultEvent) isEvent() {}
+
 // DoneEvent marks the end of a turn.
 type DoneEvent struct {
 	FinishReason string

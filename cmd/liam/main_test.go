@@ -7,33 +7,48 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mgoodness/liam/internal/config"
 )
-
-func TestRunRequiresPromptFlag(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	code := run(nil, &stdout, &stderr)
-
-	if code != 2 {
-		t.Errorf("exit code = %d, want 2", code)
-	}
-	if !strings.Contains(stderr.String(), "-p") {
-		t.Errorf("stderr = %q, want a mention of -p", stderr.String())
-	}
-}
 
 func TestRunRequiresAPIKey(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"-p", "hello"}, &stdout, &stderr)
+	code := run([]string{"-p", "hello"}, strings.NewReader(""), &stdout, &stderr)
 
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "OPENROUTER_API_KEY") {
 		t.Errorf("stderr = %q, want a mention of OPENROUTER_API_KEY", stderr.String())
+	}
+}
+
+// TestRunNoArgsOpensInteractiveTUI is issue #57's headline behavior change:
+// running liam with no arguments (no -p) opens the interactive TUI instead
+// of erroring. It drives a real tea.Program with piped input/output (per
+// Bubble Tea's own testing pattern — WithInput/WithOutput), scripting
+// "/quit" + Enter and asserting the program exits cleanly rather than
+// hanging or requiring -p.
+func TestRunNoArgsOpensInteractiveTUI(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	stdin := strings.NewReader("/quit\r")
+
+	done := make(chan int, 1)
+	go func() { done <- run(nil, stdin, &stdout, &stderr) }()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0; stderr = %q", code, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run() did not return within 5s of \"/quit\" being submitted")
 	}
 }
 
@@ -68,7 +83,7 @@ func TestConfigFileModelReachesBuildRequest(t *testing.T) {
 
 func TestRunRejectsUnknownFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"-bogus"}, &stdout, &stderr)
+	code := run([]string{"-bogus"}, strings.NewReader(""), &stdout, &stderr)
 
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
@@ -77,7 +92,7 @@ func TestRunRejectsUnknownFlag(t *testing.T) {
 
 func TestRunVersionFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"-version"}, &stdout, &stderr)
+	code := run([]string{"-version"}, strings.NewReader(""), &stdout, &stderr)
 
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)

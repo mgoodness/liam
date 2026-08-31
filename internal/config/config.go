@@ -21,8 +21,13 @@ type ProviderConfig struct {
 	Model string `json:"model,omitempty"`
 }
 
-// ThemeConfig is a stub, populated by a later ticket.
-type ThemeConfig struct{}
+// ThemeConfig configures theme selection.
+type ThemeConfig struct {
+	// Mode overrides theme auto-detection: "auto" (default, detected at
+	// startup via the terminal's background color), "dark" (Catppuccin
+	// Frappe), or "light" (Catppuccin Latte).
+	Mode string `json:"mode,omitempty"`
+}
 
 // HooksConfig is a stub, populated by a later ticket.
 type HooksConfig struct{}

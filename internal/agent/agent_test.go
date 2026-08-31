@@ -62,6 +62,25 @@ func (f *fakeTool) Run(_ context.Context, args map[string]any) tool.Result {
 	return f.result
 }
 
+// cancelingTool calls cancel as part of Run, simulating an Escape-cancelled
+// context.Context arriving mid-tool-call.
+type cancelingTool struct {
+	name   string
+	cancel context.CancelFunc
+	result tool.Result
+}
+
+func (c *cancelingTool) Name() string            { return c.name }
+func (c *cancelingTool) Description() string     { return "canceling tool" }
+func (c *cancelingTool) Parameters() tool.Schema { return tool.Schema{"type": "object"} }
+func (c *cancelingTool) Safety() tool.Safety {
+	return tool.Safety{SideEffect: tool.SideEffectRead}
+}
+func (c *cancelingTool) Run(context.Context, map[string]any) tool.Result {
+	c.cancel()
+	return c.result
+}
+
 func TestRunNoToolCallsReturnsAssistantMessage(t *testing.T) {
 	fp := &fakeProvider{turns: [][]provider.Event{
 		{
@@ -263,5 +282,61 @@ func TestRunAdvertisesRegisteredToolsSortedByName(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("Tools[%d].Name = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestRunPreservesPartialTextOnStreamError(t *testing.T) {
+	wantErr := errors.New("boom")
+	fp := &fakeProvider{
+		turns: [][]provider.Event{{provider.TextDeltaEvent{Text: "partial"}}},
+		err:   wantErr,
+	}
+	l := Loop{Provider: fp}
+
+	req := provider.Request{Messages: []provider.Message{{Role: "user", Content: "hi"}}}
+	got, err := l.Run(context.Background(), req, nil)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run() error = %v, want %v", err, wantErr)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("len(messages) = %d, want 2 (user + partial assistant): %+v", len(got), got)
+	}
+	if got[1].Role != "assistant" || got[1].Content != "partial" {
+		t.Errorf("messages[1] = %+v, want assistant %q", got[1], "partial")
+	}
+}
+
+// TestRunReturnsImmediatelyWhenCanceledDuringToolRun exercises
+// Escape-cancellation mid-Tool.Run: the loop must notice ctx is canceled
+// right after dispatch, not loop back into another (doomed) Provider.Stream
+// call before reporting the cancellation.
+func TestRunReturnsImmediatelyWhenCanceledDuringToolRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ct := &cancelingTool{name: "bash", cancel: cancel, result: tool.Result{Content: "killed"}}
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{
+			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{}`},
+			provider.DoneEvent{FinishReason: "tool_calls"},
+		},
+	}}
+	l := Loop{Provider: fp, Tools: tool.NewRegistry(ct)}
+
+	got, err := l.Run(ctx, provider.Request{}, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if len(fp.requests) != 1 {
+		t.Fatalf("Provider.Stream called %d times, want 1 (no doomed post-cancellation call)", len(fp.requests))
+	}
+
+	var toolMsg *provider.Message
+	for i := range got {
+		if got[i].Role == "tool" {
+			toolMsg = &got[i]
+		}
+	}
+	if toolMsg == nil || toolMsg.Content != "killed" {
+		t.Fatalf("messages = %+v, want the tool's result preserved", got)
 	}
 }
