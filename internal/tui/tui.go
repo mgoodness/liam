@@ -57,10 +57,11 @@ type systemLineMsg struct{ text string }
 
 // Model is the Bubbletea model driving liam's interactive shell.
 type Model struct {
-	loop     agent.Loop
-	reqModel string // cfg.Provider.Model, passed through on every turn
-	sess     *session.Session
-	skills   []skill.Skill // liam's discovered skill catalog, for /skills
+	loop         agent.Loop
+	reqModel     string // cfg.Provider.Model, passed through on every turn
+	systemPrompt string // set via WithSystemPrompt, passed through on every turn
+	sess         *session.Session
+	skills       []skill.Skill // liam's discovered skill catalog, for /skills
 
 	themeMode string // cfg.Theme.Mode: "auto" (default), "dark", "light"
 	pal       theme.Palette
@@ -88,6 +89,15 @@ type Model struct {
 // unaffected.
 func (m Model) WithMCPLoader(loader mcp.ToolLoader) Model {
 	m.mcpLoader = loader
+	return m
+}
+
+// WithSystemPrompt attaches prompt (issue #56's discovered AGENTS.md/
+// LIAM.md project instructions), carried as every turn's
+// provider.Request.SystemPrompt. A zero-value Model (no WithSystemPrompt
+// call) sends no SystemPrompt, matching every existing New(...) call site.
+func (m Model) WithSystemPrompt(prompt string) Model {
+	m.systemPrompt = prompt
 	return m
 }
 
@@ -260,8 +270,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.sess.Messages = append(m.sess.Messages, provider.Message{Role: "user", Content: text})
 
 	req := provider.Request{
-		Model:    m.reqModel,
-		Messages: append([]provider.Message(nil), m.sess.Messages...),
+		Model:        m.reqModel,
+		SystemPrompt: m.systemPrompt,
+		Messages:     append([]provider.Message(nil), m.sess.Messages...),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

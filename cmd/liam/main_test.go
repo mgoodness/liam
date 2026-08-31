@@ -258,6 +258,30 @@ func TestBuildRequestThreadsSystemPrompt(t *testing.T) {
 	}
 }
 
+// TestJoinPromptCombinesGeneralToSpecific covers run()'s merge of issue
+// #56's discovered project instructions (general) with a -skill
+// force-activated body (specific to one headless invocation), and the
+// edge cases where either side is empty.
+func TestJoinPromptCombinesGeneralToSpecific(t *testing.T) {
+	tests := []struct {
+		name           string
+		project, skill string
+		want           string
+	}{
+		{"both empty", "", "", ""},
+		{"project only", "project instructions", "", "project instructions"},
+		{"skill only", "", "skill instructions", "skill instructions"},
+		{"both present", "project instructions", "skill instructions", "project instructions\n\nskill instructions"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := joinPrompt(tt.project, tt.skill); got != tt.want {
+				t.Errorf("joinPrompt(%q, %q) = %q, want %q", tt.project, tt.skill, got, tt.want)
+			}
+		})
+	}
+}
+
 // doneProvider is a minimal provider.Provider that immediately yields a
 // DoneEvent, standing in for a real model backend in headless-mode tests
 // that only care about hook lifecycle wiring, not turn content.
