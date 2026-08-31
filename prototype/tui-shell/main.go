@@ -79,16 +79,24 @@ func (v variant) label() string {
 }
 
 type model struct {
-	variant     variant
-	dark        bool
-	showPrompt  bool
-	width       int
-	height      int
-	input       string
+	variant      variant
+	dark         bool
+	showPrompt   bool
+	width        int
+	height       int
+	input        string
+	statusLayout statusLayout
 }
 
+type statusLayout int
+
+const (
+	statusCompact statusLayout = iota
+	statusExpanded
+)
+
 func initialModel() model {
-	return model{variant: variantA, dark: true, showPrompt: true, input: ""}
+	return model{variant: variantA, dark: true, showPrompt: true, input: "", statusLayout: statusExpanded}
 }
 
 func (m model) Init() tea.Cmd { return nil }
@@ -109,6 +117,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dark = !m.dark
 		case "p":
 			m.showPrompt = !m.showPrompt
+		case "s":
+			if m.statusLayout == statusCompact {
+				m.statusLayout = statusExpanded
+			} else {
+				m.statusLayout = statusCompact
+			}
 		}
 	}
 	return m, nil
@@ -125,6 +139,8 @@ func (m model) View() string {
 	if m.width == 0 {
 		return "loading…"
 	}
+	p := m.pal()
+	w, h := m.dims()
 	var body string
 	switch m.variant {
 	case variantA:
@@ -134,8 +150,16 @@ func (m model) View() string {
 	case variantC:
 		body = m.renderC()
 	}
+	// Paint the theme's base background across the full canvas, not just
+	// individual badges — otherwise blank space and plain text fall through
+	// to the terminal's own default background regardless of theme.
+	canvas := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(p.text)).
+		Background(lipgloss.Color(p.base)).
+		Width(w).
+		Render(padTo(body, w, h))
 	switcher := m.renderSwitcher()
-	return body + "\n" + switcher
+	return canvas + "\n" + switcher
 }
 
 func (m model) renderSwitcher() string {
@@ -147,7 +171,7 @@ func (m model) renderSwitcher() string {
 		Bold(true)
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color(p.overlay))
 	return style.Render(fmt.Sprintf(" ← %s → ", m.variant.label())) +
-		help.Render("  [t] theme  [p] permission prompt  [q] quit")
+		help.Render("  [t] theme  [p] permission prompt  [s] status layout  [q] quit")
 }
 
 func main() {
@@ -165,10 +189,12 @@ func main() {
 // be inspected without a TTY (e.g. `go run . --dump`).
 func dumpAll() {
 	for v := variantA; v < variantCount; v++ {
-		m := model{variant: v, dark: true, showPrompt: true, width: 96, height: 28}
+		m := model{variant: v, dark: true, showPrompt: true, statusLayout: statusExpanded, width: 96, height: 28}
 		fmt.Printf("\n========== Variant %s ==========\n\n", v.label())
 		fmt.Println(m.View())
 	}
+	fmt.Println("\n========== Variant A, compact status ==========")
+	fmt.Println(model{variant: variantA, dark: true, showPrompt: true, statusLayout: statusCompact, width: 96, height: 28}.View())
 }
 
 func repeat(s string, n int) string {

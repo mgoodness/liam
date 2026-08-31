@@ -34,31 +34,47 @@ func renderTurn(p palette, t turn, width int) string {
 	return t.text
 }
 
-func (m model) statusLine(p palette, width int) string {
-	mode := "prompt"
-	modeColor := p.yellow
-	theme := "frappe (dark)"
-	if !m.dark {
-		theme = "latte (light)"
+// statusBlock mimics Claude Code's own external-command statusline
+// primitive: a script gets session data and prints one or more lines,
+// each becoming a row (see claude-hud, the user's own active statusline,
+// for a rich real-world example of the "expanded, multi-line, several
+// segments" end of that spectrum). "compact" here corresponds to
+// claude-hud's LineLayoutType "compact"; "expanded" to its "expanded".
+func (m model) statusBlock(p palette, width int) string {
+	badge := func(text, fg string) string {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.base)).Background(lipgloss.Color(fg)).Bold(true).Padding(0, 1).Render(text)
 	}
-	left := fmt.Sprintf(" liam  •  %s  •  %s ", mockModel, theme)
-	right := fmt.Sprintf(" mode: %s ", mode)
-	leftStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.base)).Background(lipgloss.Color(p.mauve)).Bold(true)
-	rightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.base)).Background(lipgloss.Color(modeColor)).Bold(true)
-	l, r := leftStyle.Render(left), rightStyle.Render(right)
-	gap := width - lipgloss.Width(l) - lipgloss.Width(r)
-	if gap < 0 {
-		gap = 0
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(p.subtext))
+
+	theme := themeName(m.dark)
+	line1 := badge("liam", p.mauve) + " " +
+		dim.Render(mockModel+"  •  ~/code/liam  •  🌿 main  •  mode: prompt")
+
+	if m.statusLayout == statusCompact {
+		return line1
 	}
-	bg := lipgloss.NewStyle().Background(lipgloss.Color(p.surface)).Render(strings.Repeat(" ", gap))
-	return l + bg + r
+
+	// expanded: a second line with a claude-hud-style metrics bar.
+	pct := 34
+	filled := pct / 10
+	barColor := p.green
+	if pct >= 90 {
+		barColor = p.red
+	} else if pct >= 70 {
+		barColor = p.yellow
+	}
+	bar := lipgloss.NewStyle().Foreground(lipgloss.Color(barColor)).Render(strings.Repeat("▓", filled)) +
+		lipgloss.NewStyle().Foreground(lipgloss.Color(p.overlay)).Render(strings.Repeat("░", 10-filled))
+	line2 := bar + dim.Render(fmt.Sprintf(" %d%% ctx  •  3 tools run  •  ⏱ 2m14s  •  %s", pct, theme))
+
+	return line1 + "\n" + line2
 }
 
 func (m model) inputLine(p palette, width int) string {
 	box := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(p.text)).
 		Background(lipgloss.Color(p.surface)).
-		Width(width - 4).
+		Width(width-4).
 		Padding(0, 1)
 	prompt := lipgloss.NewStyle().Foreground(lipgloss.Color(p.green)).Bold(true).Render("> ")
 	return prompt + box.Render("edit the tests too█")
@@ -81,15 +97,20 @@ func (m model) permissionBox(p palette, width int) string {
 	return box.Render(title + "\n" + body + "\n" + options)
 }
 
-// Variant A: everything (status, conversation + inline tool calls +
-// inline permission prompt, input) stacked in one continuous column —
-// closest to how Claude Code itself renders.
+// Variant A: conversation + inline tool calls + inline permission prompt
+// stacked in one continuous column, with a customizable status block
+// pinned to the bottom (just above input) — matching where Claude Code's
+// own statusline actually sits, not the top-of-screen placement most TUIs
+// default to. Press 's' to cycle status layouts (compact/expanded), the
+// prototype's stand-in for the fact that this would be a user-scriptable
+// external-command hook in the real harness, the same shape as Claude
+// Code's own `statusLine` config: a command gets session JSON on stdin,
+// prints one or more lines to stdout, each line becomes a row.
 func (m model) renderA() string {
 	p := m.pal()
 	w, h := m.dims()
+
 	var lines []string
-	lines = append(lines, m.statusLine(p, w))
-	lines = append(lines, "")
 	for _, t := range mockConversation {
 		lines = append(lines, renderTurn(p, t, w))
 	}
@@ -97,9 +118,13 @@ func (m model) renderA() string {
 		lines = append(lines, "")
 		lines = append(lines, m.permissionBox(p, w))
 	}
-	content := strings.Join(lines, "\n")
-	content = padTo(content, w, h-2)
-	return content + "\n" + m.inputLine(p, w)
+
+	status := m.statusBlock(p, w)
+	statusHeight := strings.Count(status, "\n") + 1
+	convHeight := h - statusHeight - 1 // -1 for the input line
+
+	content := padTo(strings.Join(lines, "\n"), w, convHeight)
+	return content + "\n" + status + "\n" + m.inputLine(p, w)
 }
 
 // Variant B: conversation and tool/permission activity are two
@@ -143,7 +168,7 @@ func (m model) renderB() string {
 		Render(strings.Join(actLines, "\n"))
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, mainPane, sidebar)
-	return m.statusLine(p, w) + "\n\n" + row + "\n" + m.inputLine(p, w)
+	return m.statusBlock(p, w) + "\n\n" + row + "\n" + m.inputLine(p, w)
 }
 
 // Variant C: three horizontal bands — a fuller status block, conversation,
@@ -177,7 +202,7 @@ func (m model) renderC() string {
 	stripLabel := lipgloss.NewStyle().Foreground(lipgloss.Color(p.subtext)).Bold(true).Render("ACTIVITY ")
 	stripBody := lipgloss.NewStyle().Foreground(lipgloss.Color(p.yellow)).Render("⚙ " + latest)
 	strip := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(p.surface)).
-		Width(w - 2).Padding(0, 1).Render(stripLabel + stripBody)
+		Width(w-2).Padding(0, 1).Render(stripLabel + stripBody)
 
 	var out string
 	out = statusBlock + "\n\n" + conv + "\n" + strip
