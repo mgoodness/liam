@@ -6,11 +6,13 @@ import (
 	"os"
 )
 
-// Read reads a file's full contents.
+// Read reads a file's contents, truncated at outputCap bytes (ADR-0005).
 type Read struct{}
 
-func (Read) Name() string        { return "read" }
-func (Read) Description() string { return "Read a file's contents." }
+func (Read) Name() string { return "read" }
+func (Read) Description() string {
+	return "Read a file's contents. Output over ~8000 bytes is truncated."
+}
 
 func (Read) Parameters() Schema {
 	return Schema{
@@ -39,5 +41,5 @@ func (Read) Run(_ context.Context, args map[string]any) Result {
 	if err != nil {
 		return errorResult(fmt.Sprintf("read %s: %v", path, err))
 	}
-	return Result{Content: string(data)}
+	return Result{Content: truncate(string(data))}
 }

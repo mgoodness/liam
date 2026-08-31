@@ -1,0 +1,7 @@
+# bash and read truncate output at ~8000 bytes, matching web_fetch's convention
+
+`bash` and `read` cap their output at ~8000 bytes, truncated at a clean (line, never mid-rune) boundary with a truncation marker, rather than returning unbounded content ([issue #85](https://github.com/mgoodness/liam/issues/85)). This was surfaced by research into [thenewstack.io/cut-coding-agent-tokens](https://thenewstack.io/cut-coding-agent-tokens/) (see [docs/research/cutting-agent-token-usage.md](../research/cutting-agent-token-usage.md)): `web_fetch` (issue #50) already specs this exact convention, but `bash` and `read` — already shipped — had no cap at all. Truncation lives in one shared helper so `web_fetch` reuses it rather than a third independent implementation. This is distinct from [issue #41](https://github.com/mgoodness/liam/issues/41)'s compaction design, which prunes *old* turns retroactively once context is already under pressure (v2+) — this caps a single tool call's own output the moment it returns.
+
+## Considered Options
+
+Leave `bash`/`read` unbounded and rely solely on compaction's future pruning. Rejected: compaction only prunes *old* turns once context is already under pressure — a single oversized tool result (a huge log dump, a large generated file) still pays its full token cost in the turn it's produced, and inconsistently with `web_fetch`'s own already-decided convention.
