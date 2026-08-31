@@ -17,6 +17,7 @@ import (
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/provider/openrouter"
 	"github.com/mgoodness/liam/internal/render"
+	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
 	"github.com/mgoodness/liam/internal/tui"
 )
@@ -45,6 +46,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	prompt := fs.String("p", "", "send a single prompt headlessly and exit")
 	model := fs.String("model", "", "override the provider.model config value")
+	skillName := fs.String("skill", "", "force-activate a skill by name before the prompt (headless mode only, requires -p)")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -72,21 +74,92 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	skills, err := discoverSkills(cwd, cfg, *prompt == "", stdin, stdout, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "liam: %v\n", err)
+		return 1
+	}
+
+	// -skill force-activates a skill directly, bypassing model judgment —
+	// the underlying mechanism the TUI's future /skill slash command will
+	// also use (ticket 16/17). It's headless-only for now: there's no
+	// interactive surface to trigger it from yet.
+	var forceActivated string
+	if *skillName != "" {
+		if *prompt == "" {
+			fmt.Fprintln(stderr, "liam: -skill requires -p (headless mode)")
+			return 2
+		}
+		s, found := skill.Find(skills, *skillName)
+		if !found {
+			fmt.Fprintf(stderr, "liam: unknown skill %q\n", *skillName)
+			return 1
+		}
+		forceActivated = s.Body
+	}
+
 	p := openrouter.New(apiKey)
+	tools := []tool.Tool{tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}}
+	if catalog := skill.ModelCatalog(skills); len(catalog) > 0 {
+		tools = append(tools, tool.ActivateSkill{Catalog: catalog})
+	}
 	loop := agent.Loop{
 		Provider: p,
-		Tools:    tool.NewRegistry(tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}),
+		Tools:    tool.NewRegistry(tools...),
 	}
 
 	if *prompt == "" {
-		return runInteractive(loop, cfg, stdin, stdout, stderr)
+		return runInteractive(loop, cfg, skills, stdin, stdout, stderr)
 	}
-	return runHeadless(loop, cfg, *prompt, stdout, stderr)
+	return runHeadless(loop, cfg, *prompt, forceActivated, stdout, stderr)
+}
+
+// discoverSkills builds liam's skill catalog for this run: user-scope
+// directories and skills.paths are scanned unconditionally, project-scope
+// directories only if trusted. Trust is gated on a one-time per-project
+// prompt in interactive mode; in headless mode (interactive is false),
+// blocking on stdin mid-script isn't appropriate, so it's gated on
+// cfg.Skills.TrustProjectSkills instead, defaulting to untrusted. Every
+// Diagnostic Discover returns is logged to stderr, one line each.
+func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Reader, stdout, stderr io.Writer) ([]skill.Skill, error) {
+	projectTrusted := false
+	if skill.HasProjectSkills(cwd) {
+		// skill.OpenTrustStore and skill.ResolveProjectTrust already
+		// prefix their own errors ("skill: ..."), so they're returned
+		// unwrapped here rather than wrapped again.
+		store, err := skill.OpenTrustStore()
+		if err != nil {
+			return nil, err
+		}
+
+		var promptFn skill.Prompter
+		if interactive {
+			promptFn = skill.TerminalPrompter(stdin, stdout)
+		}
+
+		root := skill.ProjectRoot(cwd)
+		trusted, err := skill.ResolveProjectTrust(store, root, cfg.Skills.TrustProjectSkills, promptFn)
+		if err != nil {
+			return nil, err
+		}
+		projectTrusted = trusted
+	}
+
+	skills, diags := skill.Discover(skill.Options{
+		Cwd:            cwd,
+		ExtraPaths:     cfg.Skills.Paths,
+		Disabled:       cfg.Skills.Disabled,
+		ProjectTrusted: projectTrusted,
+	})
+	for _, d := range diags {
+		fmt.Fprintf(stderr, "liam: skill: %s: %s\n", d.Path, d.Message)
+	}
+	return skills, nil
 }
 
 // runInteractive launches liam's Bubbletea TUI.
-func runInteractive(loop agent.Loop, cfg config.Config, stdin io.Reader, stdout, stderr io.Writer) int {
-	m := tui.New(loop, cfg)
+func runInteractive(loop agent.Loop, cfg config.Config, skills []skill.Skill, stdin io.Reader, stdout, stderr io.Writer) int {
+	m := tui.New(loop, cfg, skills)
 	opts := []tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout)}
 	p := tea.NewProgram(m, opts...)
 	if _, err := p.Run(); err != nil {
@@ -99,8 +172,10 @@ func runInteractive(loop agent.Loop, cfg config.Config, stdin io.Reader, stdout,
 // runHeadless sends prompt through loop as a single turn, streaming
 // assistant text and tool-call/result lines to stdout as they arrive, and
 // noting the actually-used model to stderr once per response.
-func runHeadless(loop agent.Loop, cfg config.Config, prompt string, stdout, stderr io.Writer) int {
-	req := buildRequest(cfg, prompt)
+// forceActivatedSkill, when non-empty, is a force-activated skill's body
+// (via -skill), carried as the turn's SystemPrompt.
+func runHeadless(loop agent.Loop, cfg config.Config, prompt, forceActivatedSkill string, stdout, stderr io.Writer) int {
+	req := buildRequest(cfg, prompt, forceActivatedSkill)
 
 	var wroteText bool
 	_, err := loop.Run(context.Background(), req, func(ev provider.Event) {
@@ -140,9 +215,12 @@ func runHeadless(loop agent.Loop, cfg config.Config, prompt string, stdout, stde
 // buildRequest assembles the provider.Request for a headless prompt,
 // threading cfg.Provider.Model through as the model actually sent to the
 // provider (empty leaves the provider's own default in place).
-func buildRequest(cfg config.Config, prompt string) provider.Request {
+// systemPrompt, when non-empty, becomes the request's SystemPrompt — used
+// by -skill's force-activation to inject a skill's body ahead of prompt.
+func buildRequest(cfg config.Config, prompt, systemPrompt string) provider.Request {
 	return provider.Request{
-		Model:    cfg.Provider.Model,
-		Messages: []provider.Message{{Role: "user", Content: prompt}},
+		Model:        cfg.Provider.Model,
+		SystemPrompt: systemPrompt,
+		Messages:     []provider.Message{{Role: "user", Content: prompt}},
 	}
 }

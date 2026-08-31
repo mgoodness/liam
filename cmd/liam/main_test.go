@@ -35,6 +35,7 @@ func TestRunRequiresAPIKey(t *testing.T) {
 func TestRunNoArgsOpensInteractiveTUI(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir()) // isolate from the real machine's ~/.agents/skills
 
 	var stdout, stderr bytes.Buffer
 	stdin := strings.NewReader("/quit\r")
@@ -75,9 +76,180 @@ func TestConfigFileModelReachesBuildRequest(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 
-	req := buildRequest(cfg, "hello")
+	req := buildRequest(cfg, "hello", "")
 	if req.Model != "openai/gpt-4o" {
 		t.Errorf("req.Model = %q, want %q", req.Model, "openai/gpt-4o")
+	}
+}
+
+// TestBuildRequestThreadsSystemPrompt covers -skill's force-activation
+// path: a force-activated skill's body reaches the request as
+// SystemPrompt.
+func TestBuildRequestThreadsSystemPrompt(t *testing.T) {
+	req := buildRequest(config.Config{}, "hello", "skill instructions")
+	if req.SystemPrompt != "skill instructions" {
+		t.Errorf("req.SystemPrompt = %q, want %q", req.SystemPrompt, "skill instructions")
+	}
+}
+
+// isolateSkillDirs points HOME/XDG_CONFIG_HOME/XDG_STATE_HOME at fresh
+// temp dirs so skill discovery/trust tests never touch the real
+// developer machine's ~/.agents/skills or trust store, and returns the
+// fresh HOME.
+func isolateSkillDirs(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	return home
+}
+
+func writeSkillFixture(t *testing.T, dir, name string) {
+	t.Helper()
+	skillDir := filepath.Join(dir, name)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	content := "---\nname: " + name + "\ndescription: a test skill\n---\n# " + name + "\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+// TestDiscoverSkillsHeadlessDefaultsUntrusted covers issue #53's headless
+// non-interactive equivalent for the project trust prompt: with no
+// skills.trustProjectSkills override and interactive=false (as in -p
+// mode), project-scope skills are not loaded.
+func TestDiscoverSkillsHeadlessDefaultsUntrusted(t *testing.T) {
+	isolateSkillDirs(t)
+	cwd := t.TempDir()
+	writeSkillFixture(t, filepath.Join(cwd, ".agents", "skills"), "proj-skill")
+
+	var stdout, stderr bytes.Buffer
+	skills, err := discoverSkills(cwd, config.Config{}, false, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("discoverSkills: %v", err)
+	}
+	if len(skills) != 0 {
+		t.Fatalf("skills = %+v, want none (untrusted project, headless mode)", skills)
+	}
+}
+
+// TestDiscoverSkillsHeadlessRespectsTrustOverride covers the documented
+// config-flag escape hatch for headless mode.
+func TestDiscoverSkillsHeadlessRespectsTrustOverride(t *testing.T) {
+	isolateSkillDirs(t)
+	cwd := t.TempDir()
+	writeSkillFixture(t, filepath.Join(cwd, ".agents", "skills"), "proj-skill")
+
+	trust := true
+	cfg := config.Config{Skills: config.SkillsConfig{TrustProjectSkills: &trust}}
+
+	var stdout, stderr bytes.Buffer
+	skills, err := discoverSkills(cwd, cfg, false, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("discoverSkills: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "proj-skill" {
+		t.Fatalf("skills = %+v, want [proj-skill] (trustProjectSkills: true)", skills)
+	}
+}
+
+// TestDiscoverSkillsInteractivePromptsAndPersistsDecision covers the
+// interactive one-time trust prompt: answering "y" loads project skills
+// and persists the decision so a second call (simulating a later run) in
+// the same project doesn't prompt again.
+func TestDiscoverSkillsInteractivePromptsAndPersistsDecision(t *testing.T) {
+	isolateSkillDirs(t)
+	cwd := t.TempDir()
+	writeSkillFixture(t, filepath.Join(cwd, ".agents", "skills"), "proj-skill")
+
+	var stdout, stderr bytes.Buffer
+	skills, err := discoverSkills(cwd, config.Config{}, true, strings.NewReader("y\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("discoverSkills: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "proj-skill" {
+		t.Fatalf("skills = %+v, want [proj-skill] after answering \"y\"", skills)
+	}
+	if !strings.Contains(stdout.String(), "trust project-level skills") {
+		t.Errorf("stdout = %q, want a trust prompt", stdout.String())
+	}
+
+	// Second call, no stdin available to answer a prompt: the persisted
+	// "trusted" decision must be reused rather than defaulting to false.
+	stdout.Reset()
+	skills, err = discoverSkills(cwd, config.Config{}, true, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("discoverSkills (second call): %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "proj-skill" {
+		t.Fatalf("skills = %+v, want [proj-skill] reused from the persisted decision", skills)
+	}
+	if strings.Contains(stdout.String(), "trust project-level skills") {
+		t.Error("second call re-prompted; want the persisted decision reused")
+	}
+}
+
+// TestDiscoverSkillsLogsDiagnosticsToStderr covers the security-scan
+// diagnostic surfacing distinctly from a trust denial (issue #53's
+// content-level check).
+func TestDiscoverSkillsLogsDiagnosticsToStderr(t *testing.T) {
+	home := isolateSkillDirs(t)
+	skillDir := filepath.Join(home, ".agents", "skills", "bad")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: bad\n---\nno description\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	skills, err := discoverSkills(t.TempDir(), config.Config{}, false, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("discoverSkills: %v", err)
+	}
+	if len(skills) != 0 {
+		t.Fatalf("skills = %+v, want none", skills)
+	}
+	if !strings.Contains(stderr.String(), "description") {
+		t.Errorf("stderr = %q, want a diagnostic about the missing description", stderr.String())
+	}
+}
+
+// TestRunSkillFlagRequiresHeadlessMode covers -skill's documented
+// restriction: it force-activates a skill ahead of a headless prompt, so
+// it requires -p.
+func TestRunSkillFlagRequiresHeadlessMode(t *testing.T) {
+	isolateSkillDirs(t)
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-skill", "foo"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "-skill requires -p") {
+		t.Errorf("stderr = %q, want a mention that -skill requires -p", stderr.String())
+	}
+}
+
+// TestRunSkillFlagUnknownSkillErrors covers -skill naming a skill that
+// wasn't discovered.
+func TestRunSkillFlagUnknownSkillErrors(t *testing.T) {
+	isolateSkillDirs(t)
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-p", "hi", "-skill", "nonexistent"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), `unknown skill "nonexistent"`) {
+		t.Errorf("stderr = %q, want a mention of the unknown skill", stderr.String())
 	}
 }
 

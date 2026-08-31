@@ -1,8 +1,9 @@
 // Package tui implements liam's interactive Bubbletea shell: the
 // stacked-stream layout (conversation scrollback with inline tool calls,
 // a bubbles/textarea input line), Catppuccin Frappe/Latte theming
-// auto-detected at startup, and the /quit, /clear, Escape-cancel session
-// commands wired to the agent loop's context.Context cancellation.
+// auto-detected at startup, and the /quit, /clear, /skills, Escape-cancel
+// session commands wired to the agent loop's context.Context
+// cancellation.
 //
 // Conversation-viewport scrolling and the customizable statusLine are
 // later tickets (#59, #60) — this package renders the full transcript
@@ -26,6 +27,7 @@ import (
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/session"
+	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/theme"
 )
 
@@ -51,6 +53,7 @@ type Model struct {
 	loop     agent.Loop
 	reqModel string // cfg.Provider.Model, passed through on every turn
 	sess     *session.Session
+	skills   []skill.Skill // liam's discovered skill catalog, for /skills
 
 	themeMode string // cfg.Theme.Mode: "auto" (default), "dark", "light"
 	pal       theme.Palette
@@ -67,14 +70,16 @@ type Model struct {
 	events chan tea.Msg // non-nil while a turn is in flight
 }
 
-// New builds the initial Model for an interactive session.
-func New(loop agent.Loop, cfg config.Config) Model {
+// New builds the initial Model for an interactive session. skills is
+// liam's discovered skill catalog (nil if none), used by /skills.
+func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 	mode := cfg.Theme.Mode
 
 	m := Model{
 		loop:      loop,
 		reqModel:  cfg.Provider.Model,
 		sess:      session.New(),
+		skills:    skills,
 		themeMode: mode,
 		// Assume dark until/unless auto-detection says otherwise — matches
 		// the spec's "default to dark (Frappe) on detection failure".
@@ -166,9 +171,9 @@ func (m Model) cancelTurn() {
 	}
 }
 
-// submit handles an Enter press: /quit and /clear run immediately, an
-// empty input or a turn already in flight is a no-op, and anything else
-// starts a new agent-loop turn.
+// submit handles an Enter press: /quit, /clear, and /skills run
+// immediately, an empty input or a turn already in flight is a no-op, and
+// anything else starts a new agent-loop turn.
 func (m Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" || m.busy {
@@ -183,6 +188,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.sess.Clear()
 		m.lines = nil
 		m.streaming.Reset()
+		return m, nil
+	case "/skills":
+		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills)})
 		return m, nil
 	}
 
@@ -319,6 +327,8 @@ func renderLine(p theme.Palette, l line) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Subtext)).Italic(true).Render("  ⚙ " + l.text)
 	case "system":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Red)).Render(l.text)
+	case "info":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Mauve)).Render(l.text)
 	default:
 		return l.text
 	}
