@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mgoodness/liam/internal/provider"
+	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
 )
 
@@ -282,6 +283,61 @@ func TestRunAdvertisesRegisteredToolsSortedByName(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("Tools[%d].Name = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// TestRunActivatesSkillAndThreadsBodyBack drives issue #53's
+// activate_skill tool through the real agent loop dispatch (via the
+// fake-Provider seam): the model calls activate_skill("commit-messages"),
+// and the skill's full SKILL.md body (frontmatter already stripped by
+// skill.Discover) is threaded back in as the tool result, then the model
+// sees it on its next turn.
+func TestRunActivatesSkillAndThreadsBodyBack(t *testing.T) {
+	catalog := []skill.Skill{
+		{Name: "commit-messages", Description: "Write conventional commit messages.", Body: "# commit-messages\n\nUse Conventional Commits."},
+	}
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{
+			provider.ToolCallEvent{ID: "call_1", Name: "activate_skill", ArgsJSON: `{"name":"commit-messages"}`},
+			provider.DoneEvent{FinishReason: "tool_calls"},
+		},
+		{
+			provider.TextDeltaEvent{Text: "done"},
+			provider.DoneEvent{FinishReason: "stop"},
+		},
+	}}
+	l := Loop{Provider: fp, Tools: tool.NewRegistry(tool.ActivateSkill{Catalog: catalog})}
+
+	req := provider.Request{Messages: []provider.Message{{Role: "user", Content: "write me a commit message"}}}
+	got, err := l.Run(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var toolMsg *provider.Message
+	for i := range got {
+		if got[i].Role == "tool" {
+			toolMsg = &got[i]
+		}
+	}
+	if toolMsg == nil {
+		t.Fatalf("no tool-role message in %+v", got)
+	}
+	if toolMsg.Content != "# commit-messages\n\nUse Conventional Commits." {
+		t.Errorf("tool result Content = %q, want the skill's body", toolMsg.Content)
+	}
+
+	// The second request must carry the activated skill's body forward so
+	// the model actually sees it.
+	secondReqMessages := fp.requests[1].Messages
+	var sawBody bool
+	for _, m := range secondReqMessages {
+		if m.Role == "tool" && m.Content == "# commit-messages\n\nUse Conventional Commits." {
+			sawBody = true
+		}
+	}
+	if !sawBody {
+		t.Errorf("second request messages = %+v, want the activated skill's body threaded back in", secondReqMessages)
 	}
 }
 
