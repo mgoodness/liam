@@ -59,6 +59,23 @@ func TestClearResetsStateAndAssignsAFreshID(t *testing.T) {
 	}
 }
 
+func TestResetContextClearsTrackerButKeepsCost(t *testing.T) {
+	s := New()
+	s.Record("openrouter/auto", provider.Usage{InputTokens: 100, CostUSD: 1.23})
+
+	s.ResetContext()
+
+	if s.LastContextTokens != 0 {
+		t.Errorf("LastContextTokens = %d, want 0 after ResetContext()", s.LastContextTokens)
+	}
+	if s.LastModel != "" {
+		t.Errorf("LastModel = %q, want %q after ResetContext()", s.LastModel, "")
+	}
+	if s.CostUSD != 1.23 {
+		t.Errorf("CostUSD = %v, want 1.23 (ResetContext must not touch cost)", s.CostUSD)
+	}
+}
+
 // fakeLookup is a ContextLookup that returns a canned max-context-length
 // per model id, with no real API calls, plus an optional error and a call
 // count so tests can assert caching behavior is the caller's job (the

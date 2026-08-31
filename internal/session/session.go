@@ -81,6 +81,17 @@ func (s *Session) ContextPercent(ctx context.Context, lookup ContextLookup) (flo
 	return float64(s.LastContextTokens) / float64(maxLen), nil
 }
 
+// ResetContext clears LastContextTokens and LastModel (leaving CostUSD
+// untouched), so ContextPercent reports 0 again until the next Record call
+// repopulates them. Compaction (issue #54) calls this whenever it condenses
+// the conversation, matching the spec'd statusLine behavior: the reported
+// context percentage goes back to unset immediately after compaction
+// rather than liam estimating the freshly-summarized size itself.
+func (s *Session) ResetContext() {
+	s.LastContextTokens = 0
+	s.LastModel = ""
+}
+
 func newID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

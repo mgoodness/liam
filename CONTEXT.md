@@ -43,3 +43,7 @@ _Avoid_: model (a provider serves many models), backend.
 **Session**:
 One continuous conversation between the user and the harness, with its own history and active toolset, ending when the user exits or explicitly resets it.
 _Avoid_: conversation, chat.
+
+**Compaction**:
+Condensing a session's older turns into a single model-generated summary once a sliding window of recent turns is exceeded, so a long conversation doesn't hit the model's context limit. Triggered manually (`/compact`) or automatically at ~85% context usage, or reactively after a `ContextTooLong` provider error.
+_Avoid_: truncation, pruning, summarization (bare — compaction is the harness-level mechanism; summarization is the model call it makes internally).

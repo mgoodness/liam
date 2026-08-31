@@ -94,11 +94,20 @@ func (m Model) WithMCPLoader(loader mcp.ToolLoader) Model {
 // New builds the initial Model for an interactive session. skills is
 // liam's discovered skill catalog (nil if none), used by /skills. If
 // loop.Hooks is set, its SessionID is pointed at the new session and its
-// sessionStart hooks fire immediately.
+// sessionStart hooks fire immediately. loop.Session is pointed at the new
+// session too (issue #54's compaction wiring), and loop.ContextLookup is
+// set from loop.Provider when it also implements session.ContextLookup
+// (true for the real openrouter.Provider) — enabling the ~85%
+// auto-compaction trigger; a fake Provider in tests that doesn't implement
+// it simply leaves auto-compaction disabled.
 func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 	mode := cfg.Theme.Mode
 
 	sess := session.New()
+	loop.Session = sess
+	if lookup, ok := loop.Provider.(session.ContextLookup); ok {
+		loop.ContextLookup = lookup
+	}
 	startSession(loop, sess)
 
 	m := Model{

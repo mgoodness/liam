@@ -3,14 +3,17 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
+	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
 )
@@ -611,14 +614,15 @@ func TestRunRetriesUpToMaxAttemptsThenFails(t *testing.T) {
 }
 
 // TestRunDoesNotRetryNonRetryableProviderErrorKinds covers the policy's
-// other branch: InvalidRequest and Unknown surface immediately by spec, and
-// ContextTooLong is treated the same way for now (issue #51) pending ticket
-// 13's compaction hook.
+// other branch: InvalidRequest and Unknown surface immediately by spec,
+// with no backoff-and-resend retry. ContextTooLong is covered separately
+// below (TestRunContextTooLong*) — issue #54 gave it its own
+// compact-then-retry-once handling instead of the backoff policy tested
+// here.
 func TestRunDoesNotRetryNonRetryableProviderErrorKinds(t *testing.T) {
 	kinds := []provider.ErrorKind{
 		provider.ErrorKindInvalidRequest,
 		provider.ErrorKindUnknown,
-		provider.ErrorKindContextTooLong,
 	}
 	for _, kind := range kinds {
 		t.Run(string(kind), func(t *testing.T) {
@@ -634,6 +638,173 @@ func TestRunDoesNotRetryNonRetryableProviderErrorKinds(t *testing.T) {
 				t.Fatalf("Provider.Stream called %d times, want 1 (no retry for Kind=%s)", len(fp.requests), kind)
 			}
 		})
+	}
+}
+
+// fakeContextLookup is a session.ContextLookup returning a canned max
+// context length per model id, for driving auto-compaction's threshold
+// check without a real API call.
+type fakeContextLookup struct {
+	maxByModel map[string]int
+}
+
+func (f *fakeContextLookup) MaxContextLength(_ context.Context, model string) (int, error) {
+	return f.maxByModel[model], nil
+}
+
+// turnsOfHistory builds n user/assistant turn pairs, for tests that need a
+// message history longer than a small KeepRecentTurns window.
+func turnsOfHistory(n int) []provider.Message {
+	var out []provider.Message
+	for i := 0; i < n; i++ {
+		out = append(out,
+			provider.Message{Role: "user", Content: fmt.Sprintf("turn %d", i)},
+			provider.Message{Role: "assistant", Content: fmt.Sprintf("reply %d", i)},
+		)
+	}
+	return out
+}
+
+// TestRunContextTooLongWithNothingToCompactSurfacesImmediately covers the
+// degenerate case: a ContextTooLong failure on a request with no history
+// older than the sliding window has nothing to compact away, so Run's one
+// retry attempt is skipped and the original error surfaces, same as
+// before issue #54.
+func TestRunContextTooLongWithNothingToCompactSurfacesImmediately(t *testing.T) {
+	wantErr := &provider.ProviderError{Kind: provider.ErrorKindContextTooLong, Cause: errors.New("too long")}
+	fp := &fakeProvider{errs: []error{wantErr}}
+	l := Loop{Provider: fp, Backoff: func(int) time.Duration { return 0 }}
+
+	_, err := l.Run(context.Background(), provider.Request{}, nil)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run() error = %v, want %v", err, wantErr)
+	}
+	if len(fp.requests) != 1 {
+		t.Fatalf("Provider.Stream called %d times, want 1 (nothing to compact, no retry)", len(fp.requests))
+	}
+}
+
+// TestRunContextTooLongCompactsThenRetriesOnceAndSucceeds drives issue
+// #54's ContextTooLong extension point end-to-end: the first attempt fails
+// with ContextTooLong, Run compacts the oversized history via a
+// Provider.Stream summarization call, then retries the original request
+// once against the now-compacted history and succeeds.
+func TestRunContextTooLongCompactsThenRetriesOnceAndSucceeds(t *testing.T) {
+	history := turnsOfHistory(5) // 5 user turns; KeepRecentTurns keeps only 1
+	fp := &fakeProvider{
+		turns: [][]provider.Event{
+			nil, // attempt 1: the too-long request, no events before the error
+			{provider.TextDeltaEvent{Text: "the summary"}},                                     // the summarization call
+			{provider.TextDeltaEvent{Text: "hello"}, provider.DoneEvent{FinishReason: "stop"}}, // the retried request
+		},
+		errs: []error{
+			&provider.ProviderError{Kind: provider.ErrorKindContextTooLong, Cause: errors.New("too long")},
+		},
+	}
+	l := Loop{Provider: fp, KeepRecentTurns: 1, Backoff: func(int) time.Duration { return 0 }}
+
+	req := provider.Request{Messages: history}
+	got, err := l.Run(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(fp.requests) != 3 {
+		t.Fatalf("Provider.Stream called %d times, want 3 (failed attempt + summarize + retry): %+v", len(fp.requests), fp.requests)
+	}
+
+	retriedMessages := fp.requests[2].Messages
+	if retriedMessages[0].Role != "user" || !strings.Contains(retriedMessages[0].Content, "the summary") {
+		t.Errorf("retried request's first message = %+v, want the compacted summary", retriedMessages[0])
+	}
+
+	if got[len(got)-1].Role != "assistant" || got[len(got)-1].Content != "hello" {
+		t.Errorf("final message = %+v, want the retried turn's assistant reply", got[len(got)-1])
+	}
+}
+
+// TestRunContextTooLongRetryStillFailsSurfacesThatError covers the "retry
+// once" half of the policy: when the post-compaction retry also fails, Run
+// gives up rather than compacting again.
+func TestRunContextTooLongRetryStillFailsSurfacesThatError(t *testing.T) {
+	history := turnsOfHistory(5)
+	retryErr := errors.New("still broken")
+	fp := &fakeProvider{
+		turns: [][]provider.Event{
+			nil,
+			{provider.TextDeltaEvent{Text: "the summary"}},
+			nil,
+		},
+		errs: []error{
+			&provider.ProviderError{Kind: provider.ErrorKindContextTooLong, Cause: errors.New("too long")},
+			nil,
+			retryErr,
+		},
+	}
+	l := Loop{Provider: fp, KeepRecentTurns: 1, Backoff: func(int) time.Duration { return 0 }}
+
+	_, err := l.Run(context.Background(), provider.Request{Messages: history}, nil)
+	if !errors.Is(err, retryErr) {
+		t.Fatalf("Run() error = %v, want %v", err, retryErr)
+	}
+	if len(fp.requests) != 3 {
+		t.Fatalf("Provider.Stream called %d times, want 3 (no second compaction attempt): %+v", len(fp.requests), fp.requests)
+	}
+}
+
+// TestRunAutoCompactsWhenContextPercentAtOrAboveThreshold drives issue
+// #54's proactive auto-trigger: Session/ContextLookup report usage already
+// at the ~85% threshold before the turn even starts, so Run compacts the
+// history first and resets Session's tracker, rather than waiting for a
+// ContextTooLong failure.
+func TestRunAutoCompactsWhenContextPercentAtOrAboveThreshold(t *testing.T) {
+	history := turnsOfHistory(5)
+	sess := session.New()
+	sess.Record("test-model", provider.Usage{InputTokens: 850})
+	lookup := &fakeContextLookup{maxByModel: map[string]int{"test-model": 1000}} // 85.0%
+
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{provider.TextDeltaEvent{Text: "the summary"}},
+		{provider.TextDeltaEvent{Text: "hello"}, provider.DoneEvent{FinishReason: "stop"}},
+	}}
+	l := Loop{Provider: fp, Session: sess, ContextLookup: lookup, KeepRecentTurns: 1}
+
+	req := provider.Request{Model: "test-model", Messages: history}
+	if _, err := l.Run(context.Background(), req, nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(fp.requests) != 2 {
+		t.Fatalf("Provider.Stream called %d times, want 2 (auto-compact summarize + the turn): %+v", len(fp.requests), fp.requests)
+	}
+
+	turnMessages := fp.requests[1].Messages
+	if turnMessages[0].Role != "user" || !strings.Contains(turnMessages[0].Content, "the summary") {
+		t.Errorf("turn request's first message = %+v, want the compacted summary", turnMessages[0])
+	}
+
+	// Compaction must reset the tracker immediately (issue #54's criterion):
+	// with onEvent nil here, nothing else touches Session afterward, so its
+	// state should still show the reset, not the pre-compaction 85%.
+	if sess.LastModel != "" || sess.LastContextTokens != 0 {
+		t.Errorf("Session = {LastModel: %q, LastContextTokens: %d}, want both cleared by compaction", sess.LastModel, sess.LastContextTokens)
+	}
+}
+
+// TestRunAutoCompactDisabledWithoutSessionOrContextLookup covers the nil
+// guard: with neither Session nor ContextLookup set (headless mode's
+// default), Run never consults auto-compaction at all, regardless of
+// history length.
+func TestRunAutoCompactDisabledWithoutSessionOrContextLookup(t *testing.T) {
+	history := turnsOfHistory(5)
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{provider.TextDeltaEvent{Text: "hello"}, provider.DoneEvent{FinishReason: "stop"}},
+	}}
+	l := Loop{Provider: fp, KeepRecentTurns: 1}
+
+	if _, err := l.Run(context.Background(), provider.Request{Messages: history}, nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(fp.requests) != 1 {
+		t.Fatalf("Provider.Stream called %d times, want 1 (no auto-compaction call)", len(fp.requests))
 	}
 }
 
