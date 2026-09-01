@@ -118,7 +118,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	p := openrouter.New(apiKey)
-	findSearcher, grepSearcher := findGrepSearchers(cwd, stderr)
+	findSearcher, grepSearcher := findGrepSearchers(cwd)
 	tools := []tool.Tool{tool.Read{}, tool.Write{}, tool.Edit{}, tool.Bash{}, tool.Find{Searcher: findSearcher}, tool.Grep{Searcher: grepSearcher}, tool.WebFetch{}}
 	// web_search is silently unregistered when EXA_API_KEY is unset
 	// (issue #50's spec), rather than erroring like OPENROUTER_API_KEY's
@@ -237,10 +237,10 @@ func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Re
 // hardwired fff-mcp special-case (ticket #49's auto-detect-on-$PATH,
 // internal, non-user-visible MCP connection). A native (non-MCP) fff
 // integration is tracked separately for v2+ — see
-// docs/research/golang-fff-alternatives.md. The active searcher is still
-// logged to stderr, matching ticket #18's resolution.
-func findGrepSearchers(cwd string, stderr io.Writer) (tool.FindSearcher, tool.GrepSearcher) {
-	fmt.Fprintln(stderr, "liam: find/grep searcher=stdlib")
+// docs/research/golang-fff-alternatives.md. Ticket #18's stderr
+// announcement was removed by issue #122 once the searcher stopped
+// varying and the log line stopped conveying anything.
+func findGrepSearchers(cwd string) (tool.FindSearcher, tool.GrepSearcher) {
 	stdlib := tool.StdlibSearch{Dir: cwd}
 	return stdlib, stdlib
 }
