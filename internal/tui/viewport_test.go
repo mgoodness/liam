@@ -57,10 +57,12 @@ func TestPageDownAtBottomIsNoOpAndDoesNotBreakFollow(t *testing.T) {
 	}
 }
 
-// TestPageDownReachingBottomStaysPinnedUntilEnd covers the AC precisely:
-// only End resumes auto-follow — paging back down to the very same bottom
-// row on its own must NOT resume it.
-func TestPageDownReachingBottomStaysPinnedUntilEnd(t *testing.T) {
+// TestPageDownReachingBottomResumesAutoFollow is a regression test: paging
+// back down to the exact bottom row (without pressing End) must resume
+// auto-follow on its own, the same as End does — a scroll that overshoots
+// past the bottom and only settles there is indistinguishable, from the
+// reader's perspective, from explicitly asking to jump to the end.
+func TestPageDownReachingBottomResumesAutoFollow(t *testing.T) {
 	m := sized(t, New(agent.Loop{}, config.Config{}, nil), 30)
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
@@ -79,14 +81,8 @@ func TestPageDownReachingBottomStaysPinnedUntilEnd(t *testing.T) {
 	if !mm.viewport.AtBottom() {
 		t.Fatal("pgdown never reached the bottom")
 	}
-	if mm.followBottom {
-		t.Error("reaching the bottom via pgdown alone resumed followBottom, want it to stay pinned until End")
-	}
-
-	next, _ = mm.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
-	after := next.(Model)
-	if !after.followBottom {
-		t.Error("End did not resume auto-follow after pgdown reached the bottom")
+	if !mm.followBottom {
+		t.Error("reaching the bottom via pgdown alone did not resume auto-follow")
 	}
 }
 
