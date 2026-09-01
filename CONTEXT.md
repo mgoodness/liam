@@ -47,3 +47,7 @@ _Avoid_: conversation, chat.
 **Compaction**:
 Condensing a session's older turns into a single model-generated summary once a sliding window of recent turns is exceeded, so a long conversation doesn't hit the model's context limit. Triggered manually (`/compact`) or automatically at ~85% context usage, or reactively after a `ContextTooLong` provider error.
 _Avoid_: truncation, pruning, summarization (bare — compaction is the harness-level mechanism; summarization is the model call it makes internally).
+
+**Identity preamble**:
+A fixed, non-configurable block of text — liam's name and a one-line description of what it does — that the harness always prepends to a turn's assembled system prompt, ahead of any discovered project instructions. Establishes what liam is regardless of the underlying model or whether a project defines its own `AGENTS.md`/`LIAM.md`.
+_Avoid_: system prompt (bare — the full assembled system prompt includes this plus project instructions), preamble (bare).
