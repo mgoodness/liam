@@ -98,7 +98,7 @@ Don't add a comment a well-named identifier already makes redundant.
 - Plain-text/deterministic-output tools use golden files:
   `testdata/*.golden`, read back via a small `readFile`/`readGolden`
   helper, with an `-update` flag convention for regenerating them
-  (`internal/tool/websearch_test.go`, `internal/mcp/fff_test.go`).
+  (`internal/tool/websearch_test.go`, `internal/tool/search_stdlib_test.go`).
 - Test *external, observable behavior* — what a function returns, what a
   fake-driven loop does with a given input, what a config string parses
   into — never internal implementation details of how the result was

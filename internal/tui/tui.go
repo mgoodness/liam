@@ -137,10 +137,10 @@ func (m Model) WithSystemPrompt(prompt string) Model {
 }
 
 // WithFindSearcher attaches searcher, backing the "@"-file-reference
-// autocomplete popup (issue #58) with the same fff/stdlib-fallback searcher
-// the find tool itself uses. A zero-value Model (no WithFindSearcher call)
-// leaves it nil, disabling "@" autocomplete entirely — matching every
-// existing New(...) call site.
+// autocomplete popup (issue #58) with the same searcher the find tool
+// itself uses. A zero-value Model (no WithFindSearcher call) leaves it nil,
+// disabling "@" autocomplete entirely — matching every existing New(...)
+// call site.
 func (m Model) WithFindSearcher(searcher tool.FindSearcher) Model {
 	m.findSearcher = searcher
 	return m
