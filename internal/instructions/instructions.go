@@ -1,6 +1,8 @@
 // Package instructions discovers and assembles project-instruction files —
-// AGENTS.md and LIAM.md — into the text used as a provider.Request's
-// SystemPrompt.
+// AGENTS.md and LIAM.md — into text that becomes part of a provider.Request's
+// SystemPrompt, and also holds Preamble, liam's fixed identity block that
+// precedes that assembled text on every request (see Preamble's own doc
+// comment for why it's kept outside Load's discovery/cap logic).
 package instructions
 
 import (
