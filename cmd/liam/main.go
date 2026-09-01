@@ -232,26 +232,17 @@ func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Re
 	return skills, nil
 }
 
-// findGrepSearchers picks find/grep's searcher (ticket #49): fff-mcp, via
-// an internal, non-user-visible MCP connection rooted at cwd, when the
-// fff-mcp binary is on $PATH, otherwise tool.StdlibSearch. Auto-detected
-// once at startup, not a config toggle — the active searcher is logged to
-// stderr either way (ticket #18's resolution).
+// findGrepSearchers backs find/grep with tool.StdlibSearch rooted at cwd,
+// unconditionally — the sole searcher since issue #97 removed the
+// hardwired fff-mcp special-case (ticket #49's auto-detect-on-$PATH,
+// internal, non-user-visible MCP connection). A native (non-MCP) fff
+// integration is tracked separately for v2+ — see
+// docs/research/golang-fff-alternatives.md. The active searcher is still
+// logged to stderr, matching ticket #18's resolution.
 func findGrepSearchers(cwd string, stderr io.Writer) (tool.FindSearcher, tool.GrepSearcher) {
+	fmt.Fprintln(stderr, "liam: find/grep searcher=stdlib")
 	stdlib := tool.StdlibSearch{Dir: cwd}
-	if !mcp.DetectFFF() {
-		fmt.Fprintln(stderr, "liam: find/grep searcher=stdlib (fff-mcp not found on $PATH)")
-		return stdlib, stdlib
-	}
-
-	fff, err := mcp.StartFFF(context.Background(), cwd)
-	if err != nil {
-		fmt.Fprintf(stderr, "liam: find/grep searcher=stdlib (fff-mcp: %v)\n", err)
-		return stdlib, stdlib
-	}
-
-	fmt.Fprintln(stderr, "liam: find/grep searcher=fff-mcp")
-	return fff, fff
+	return stdlib, stdlib
 }
 
 // interactiveDeps bundles runInteractive's TUI-construction dependencies,

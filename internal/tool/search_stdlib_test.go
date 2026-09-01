@@ -86,9 +86,8 @@ func TestStdlibSearchFindEmptyQueryListsEverything(t *testing.T) {
 
 // TestGrepRunMatchesGoldenOutput and TestFindRunMatchesGoldenOutput are
 // this ticket's golden-file coverage (issue #49's acceptance criteria):
-// the same fixture inputs, run through the stdlib searcher here and the
-// fff-mcp searcher in internal/mcp's own fff_test.go, must produce
-// byte-identical Result.Content against the shared golden file.
+// the stdlib searcher's output for these fixture inputs must match the
+// golden file byte-for-byte.
 func TestGrepRunMatchesGoldenOutput(t *testing.T) {
 	searcher := StdlibSearch{Dir: "testdata/fixture_grep"}
 	got := Grep{Searcher: searcher}.Run(context.Background(), map[string]any{"query": "foo"})

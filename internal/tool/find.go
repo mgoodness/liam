@@ -6,9 +6,8 @@ import (
 )
 
 // Find searches file paths under the working directory by name, backed by
-// a FindSearcher — fff-mcp when available, a stdlib fallback otherwise
-// (ticket #49). Output is identical plain text regardless of which
-// searcher served it.
+// a FindSearcher — StdlibSearch as of issue #97's removal of the fff-mcp
+// special-case.
 type Find struct {
 	Searcher FindSearcher
 }

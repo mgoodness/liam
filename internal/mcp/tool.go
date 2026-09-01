@@ -54,9 +54,8 @@ func (t *mcpTool) Run(ctx context.Context, args map[string]any) tool.Result {
 	return tool.Result{Content: textContent(res.Content), IsError: res.IsError}
 }
 
-// textContent concatenates every TextContent block in content — the
-// shared plain-text-only convention mcpTool.Run and FFF.call (fff.go)
-// both rely on.
+// textContent concatenates every TextContent block in content —
+// mcpTool.Run's plain-text-only convention.
 func textContent(content []sdkmcp.Content) string {
 	var sb strings.Builder
 	for _, c := range content {

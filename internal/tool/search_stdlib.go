@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-// StdlibSearch is find/grep's always-available fallback searcher
-// (filepath.WalkDir + regexp/bufio.Scanner), used when fff-mcp isn't on
-// $PATH (ticket #18's resolution). It's deliberately naive next to
-// fff-mcp: no index, no frecency, a full tree walk per call.
+// StdlibSearch is find/grep's searcher (filepath.WalkDir +
+// regexp/bufio.Scanner), the sole implementation since issue #97 removed
+// the fff-mcp special-case. It's deliberately naive: no index, no
+// frecency, a full tree walk per call (ticket #18's resolution).
 type StdlibSearch struct {
 	// Dir is the root to search under. Empty defaults to the process's
 	// current working directory.
