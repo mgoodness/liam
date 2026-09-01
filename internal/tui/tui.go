@@ -90,7 +90,7 @@ type Model struct {
 	streaming *strings.Builder
 
 	viewport     viewport.Model // scrolls the read-only transcript (issue #59)
-	followBottom bool           // true = auto-follow new content; false once a manual scroll has pinned the position
+	followBottom bool           // true = auto-follow new content; false while a manual scroll has pinned the position away from the bottom
 
 	input  textarea.Model
 	width  int
@@ -475,16 +475,20 @@ func (m *Model) refreshViewport() {
 	}
 }
 
-// pinIfScrolled marks the position pinned (m.followBottom = false) only
-// when the viewport's offset actually moved from before — never on a
-// no-op scroll, such as PageDown pressed while already at the bottom, so
-// an accidental extra keypress can't spuriously break auto-follow. Once
-// pinned, only End (handleKey's own "end" case) resumes auto-follow —
-// scrolling back down to the same bottom row on its own does not.
+// pinIfScrolled re-derives m.followBottom from where the scroll actually
+// landed — left alone on a no-op scroll (e.g. PageDown pressed while
+// already at the bottom, so an accidental extra keypress can't spuriously
+// break auto-follow), otherwise pinned false unless the scroll happened to
+// land exactly back at the bottom row, in which case auto-follow resumes.
+// This mirrors End's own "true" assignment (handleKey's "end" case) so a
+// manual scroll that returns to the bottom behaves the same as explicitly
+// pressing End, matching how chat/pager UIs conventionally resume
+// following once the reader is back at the live edge.
 func (m *Model) pinIfScrolled(before int) {
-	if m.viewport.YOffset() != before {
-		m.followBottom = false
+	if m.viewport.YOffset() == before {
+		return
 	}
+	m.followBottom = m.viewport.AtBottom()
 }
 
 // scrollViewport re-syncs the viewport's dimensions, applies scroll, then
