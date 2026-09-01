@@ -553,12 +553,17 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		if s, found := skill.Find(m.skills, name); found {
 			m.activateSkill(s)
 			if rest == "" {
+				// No trailing text: print the command itself, same as
+				// any other submitted input, but start no turn — the
+				// activated skill's effect on the next turn is what
+				// actually does something.
+				m.lines = append(m.lines, line{role: "user", text: text})
+				m.refreshViewport()
 				return m, nil
 			}
-			// Trailing text after the skill name becomes the first
-			// turn's message, sent immediately below — see
-			// skillCommandName's doc comment.
-			text = rest
+			// Trailing text after the skill name: fall through and
+			// send the full literal command below, starting a turn
+			// immediately — see skillCommandName's doc comment.
 		}
 		// No matching skill: fall through and send text as an ordinary
 		// chat message, same as any other unrecognized input — liam has

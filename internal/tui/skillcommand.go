@@ -9,11 +9,14 @@ import (
 // skillCommandName reports the skill name a bare "/<name>" input would
 // activate, plus any trailing text after it — ticket #16's decided
 // force-activation path, typed the same way Claude Code itself invokes a
-// skill (a bare slash command, no separate "skill" keyword). rest is "" if
-// nothing follows the name; when non-empty, the caller sends it as the
-// activated skill's first turn, mirroring how Claude Code's own slash
-// commands pass trailing text through as the command's arguments and act
-// on them immediately, rather than requiring a separate follow-up message.
+// skill (a bare slash command, no separate "skill" keyword). rest is ""
+// if nothing follows the name, in which case the caller starts no turn;
+// otherwise it's non-empty and the caller starts a turn immediately,
+// mirroring how Claude Code's own slash commands pass arguments through
+// and act on them right away rather than requiring a separate follow-up
+// message. Either way the caller submits the full literal command text
+// (not just rest) as the user-visible/sent message — rest's only job here
+// is signaling whether to start a turn.
 func skillCommandName(text string) (name, rest string, ok bool) {
 	body, ok := strings.CutPrefix(text, "/")
 	if !ok {
@@ -26,11 +29,11 @@ func skillCommandName(text string) (name, rest string, ok bool) {
 // activateSkill force-activates s, bypassing model judgment entirely
 // (unlike activate_skill, which the model calls on its own) by folding its
 // body into m.systemPrompt — the same mechanism headless mode's -skill
-// flag already uses to force-activate a skill for an entire run. Silent by
-// design: it starts no turn and renders no confirmation line itself; the
-// caller (submit) decides whether trailing text after the skill name means
-// a turn should start immediately, and that turn's own user/assistant
-// lines are the only visible sign activation happened.
+// flag already uses to force-activate a skill for an entire run. It
+// renders no confirmation line of its own and starts no turn — the caller
+// (submit) prints the literal command like any other input and decides
+// whether trailing text after the skill name means a turn should start
+// immediately.
 func (m *Model) activateSkill(s skill.Skill) {
 	if m.systemPrompt == "" {
 		m.systemPrompt = s.Body
