@@ -39,23 +39,42 @@ func (f *multiCallProvider) Stream(_ context.Context, _ provider.Request) iter.S
 	}
 }
 
-// drain repeatedly invokes cmd and feeds the resulting Msg back through
-// Update, exactly as a real tea.Program would, until a turnDoneMsg is
-// processed. It returns the final Model.
+// drain repeatedly invokes pending commands and feeds each resulting Msg
+// back through Update, exactly as a real tea.Program would, until a
+// turnDoneMsg is processed — at which point it returns immediately,
+// leaving any other still-pending commands (e.g. a batched statusLine
+// refresh's debounce tick) uninvoked, same as every other test in this
+// package that never drives Update far enough to reach one. A tea.
+// BatchMsg (concurrent commands returned via tea.Batch, e.g. streamMsg's
+// event-wait batched with a statusLine refresh trigger) is unpacked into
+// the same worklist rather than fed to Update directly, mirroring how the
+// real runtime executes each of a batch's commands independently.
 func drain(t *testing.T, m Model, cmd tea.Cmd) Model {
 	t.Helper()
 	if cmd == nil {
 		t.Fatal("drain: nil cmd, nothing to pump")
 	}
-	for {
+	pending := []tea.Cmd{cmd}
+	for len(pending) > 0 {
+		cmd, pending = pending[0], pending[1:]
+		if cmd == nil {
+			continue
+		}
 		msg := cmd()
-		var next tea.Model
-		next, cmd = m.Update(msg)
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			pending = append(pending, batch...)
+			continue
+		}
+		next, newCmd := m.Update(msg)
 		m = next.(Model)
 		if _, ok := msg.(turnDoneMsg); ok {
 			return m
 		}
+		if newCmd != nil {
+			pending = append(pending, newCmd)
+		}
 	}
+	return m
 }
 
 func TestSubmitStreamsResponseAndAppendsAssistantLine(t *testing.T) {
@@ -184,6 +203,7 @@ func TestSubmitSlashQuitReturnsQuitCmd(t *testing.T) {
 
 func TestSubmitSlashClearResetsSessionAndLines(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{}, nil)
+	m.statusDebounce = 0 // avoid a real 300ms sleep when the test invokes cmd() below
 	m.lines = []line{{role: "user", text: "old"}}
 	m.sess.Messages = []provider.Message{{Role: "user", Content: "old"}}
 	oldID := m.sess.ID
@@ -192,8 +212,14 @@ func TestSubmitSlashClearResetsSessionAndLines(t *testing.T) {
 	next, cmd := m.submit()
 	mm := next.(Model)
 
-	if cmd != nil {
-		t.Error("submit(\"/clear\") returned a non-nil cmd, want nil (no turn started)")
+	// /clear starts no turn, but it does fire a fresh "session start"
+	// statusLine refresh (issue #60) — so cmd is the debounce tick for
+	// that, not nil.
+	if cmd == nil {
+		t.Fatal("submit(\"/clear\") returned a nil cmd, want the statusLine session-start refresh")
+	}
+	if _, ok := cmd().(statusRefreshMsg); !ok {
+		t.Errorf("submit(\"/clear\") cmd produced %#v, want a statusRefreshMsg", cmd())
 	}
 	if len(mm.lines) != 0 {
 		t.Errorf("lines = %+v, want empty after /clear", mm.lines)
@@ -388,11 +414,23 @@ func TestUpdateBackgroundColorMsgResolvesTheme(t *testing.T) {
 
 func TestNewAppliesThemeModeOverrideWithoutDetection(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "light"}}, nil)
+	m.statusDebounce = 0 // avoid a real 300ms sleep when the test invokes cmd() below
 	if m.pal.Dark {
 		t.Errorf("pal = %+v, want the light palette when theme.mode=light", m.pal)
 	}
-	if cmd := m.Init(); cmd != nil {
-		t.Error("Init() returned a background-color request despite theme.mode override")
+
+	// Init() always fires the statusLine session-start refresh (issue
+	// #60), so it's never nil; theme.mode=light's own effect is that this
+	// is the *only* cmd it returns — no background-color request batched
+	// alongside it (compactCmds returns a lone cmd directly rather than
+	// wrapping it in a tea.BatchMsg, so a statusRefreshMsg alone proves
+	// nothing else was requested).
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init() = nil, want the statusLine session-start refresh")
+	}
+	if _, ok := cmd().(statusRefreshMsg); !ok {
+		t.Error("Init() returned more than just the statusLine refresh despite theme.mode override")
 	}
 }
 
