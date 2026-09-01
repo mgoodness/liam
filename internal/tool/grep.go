@@ -6,9 +6,8 @@ import (
 )
 
 // Grep searches file contents line by line under the working directory,
-// backed by a GrepSearcher — fff-mcp when available, a stdlib fallback
-// otherwise (ticket #49). Output is identical plain text regardless of
-// which searcher served it.
+// backed by a GrepSearcher — StdlibSearch as of issue #97's removal of the
+// fff-mcp special-case.
 type Grep struct {
 	Searcher GrepSearcher
 }

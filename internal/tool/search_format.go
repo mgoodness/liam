@@ -37,9 +37,6 @@ func formatTruncationNotice(singular, plural string, hidden int) string {
 // convention (ticket #18's resolution, matching OpenCode's own proven
 // shape): a header count line, results grouped by file, "Line <n>: <text>"
 // rows, and a truncation notice appended when total exceeds len(matches).
-// Both the fff-mcp and stdlib searchers funnel through this one function,
-// so the model sees identical output regardless of which one served the
-// request.
 func formatGrepResults(matches []GrepMatch, total int) string {
 	header := formatHeader("match", "matches", total, len(matches))
 	if total == 0 {

@@ -8,9 +8,11 @@ import (
 	"github.com/mgoodness/liam/internal/tool"
 )
 
-func TestFindGrepSearchersFallsBackToStdlibWithoutFFF(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // fff-mcp isn't resolvable
-
+// TestFindGrepSearchersReturnsStdlibUnconditionally covers issue #97's
+// removal of the fff-mcp special-case: find/grep are backed by
+// tool.StdlibSearch regardless of the environment, with no detection or
+// spawn attempt of any kind.
+func TestFindGrepSearchersReturnsStdlibUnconditionally(t *testing.T) {
 	var stderr bytes.Buffer
 	findSearcher, grepSearcher := findGrepSearchers(t.TempDir(), &stderr)
 
