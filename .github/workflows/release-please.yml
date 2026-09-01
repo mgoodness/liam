@@ -17,6 +17,12 @@ jobs:
       # the default GITHUB_TOKEN — GitHub doesn't fire follow-on workflow runs
       # (ci.yml's pull_request checks on the release PR, release.yml's
       # tag-push GoReleaser job) for events triggered by the built-in token.
+      #
+      # permission-workflows is required too: GitHub's release-creation
+      # endpoint demands it whenever the release's target commit's
+      # .github/workflows/ content differs from the current default branch —
+      # true here since main moves past the release commit (further ci/cd
+      # workflow edits, say) before the release PR merges and gets tagged.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
@@ -24,6 +30,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
 
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
