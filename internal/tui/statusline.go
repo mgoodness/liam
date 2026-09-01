@@ -1,11 +1,12 @@
 package tui
 
 // This file holds the customizable statusLine (issue #60): a status block
-// pinned above the input line, refreshed on session start, after each
-// response, after each tool call, and an optional timer — every trigger
-// debounced at 300ms via statusGen/statusRefreshMsg/statusRenderedMsg's
-// generation check, so a burst of triggers within the debounce window
-// only actually runs the (potentially external-process) render once.
+// rendered below the input line, as the screen's bottom footer (issue
+// #123), refreshed on session start, after each response, after each tool
+// call, and an optional timer — every trigger debounced at 300ms via
+// statusGen/statusRefreshMsg/statusRenderedMsg's generation check, so a
+// burst of triggers within the debounce window only actually runs the
+// (potentially external-process) render once.
 // Model's own fields, construction, and the Update/View integration
 // points this plugs into stay in tui.go, matching mention.go/history.go's
 // own split.

@@ -169,9 +169,10 @@ func TestRenderStatusBlockJoinsRowsWithTrailingNewline(t *testing.T) {
 	}
 }
 
-// TestViewPlacesStatusBlockAboveInput covers the spec's layout: the status
-// block sits between the transcript and the input line, not top-of-screen.
-func TestViewPlacesStatusBlockAboveInput(t *testing.T) {
+// TestViewPlacesStatusBlockBelowInput covers the spec's layout: the status
+// block is the last thing on screen, below the input line, not pinned
+// above it.
+func TestViewPlacesStatusBlockBelowInput(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{}, nil)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	m = next.(Model)
@@ -183,8 +184,43 @@ func TestViewPlacesStatusBlockAboveInput(t *testing.T) {
 	if statusIdx == -1 {
 		t.Fatal("View() content doesn't include the status block")
 	}
-	if inputIdx == -1 || statusIdx >= inputIdx {
-		t.Errorf("status block (at %d) is not positioned above the input line (at %d)", statusIdx, inputIdx)
+	if inputIdx == -1 || statusIdx <= inputIdx {
+		t.Errorf("status block (at %d) is not positioned below the input line (at %d)", statusIdx, inputIdx)
+	}
+}
+
+// TestViewCursorRowExcludesStatusBlockRows covers the other half of the
+// relayout: since the status block now renders below the input instead of
+// above it, its row count must no longer be added to the input's on-screen
+// cursor row. A non-trivial cursor row (not row 0) plus a non-empty status
+// block means a regression that re-adds len(m.statusLines) would produce a
+// cursor row that's off by exactly that count, and this test would catch
+// it.
+func TestViewCursorRowExcludesStatusBlockRows(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m = next.(Model)
+	m.input.Focus()
+	m.input.SetVirtualCursor(false)
+
+	value := "line one\nline two\nline three"
+	m.input.SetValue(value)
+	moveCursorToOffset(&m.input, value, len("line one\n"))
+	m.statusLines = []string{"status row one", "status row two"}
+	m.syncViewportDims()
+
+	cur := m.input.Cursor()
+	if cur == nil {
+		t.Fatal("input.Cursor() = nil, want a cursor (input is focused)")
+	}
+	if cur.Y == 0 {
+		t.Fatal("test setup: cursor row is 0, want a non-trivial row")
+	}
+
+	v := m.View()
+	want := cur.Y + m.viewport.Height() + 1
+	if v.Cursor == nil || v.Cursor.Y != want {
+		t.Errorf("View().Cursor.Y = %v, want %d (status block rows must not be added since the block is below the cursor)", v.Cursor, want)
 	}
 }
 

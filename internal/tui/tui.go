@@ -5,12 +5,13 @@
 // /<skill-name>, Escape-cancel session commands wired to the agent loop's
 // context.Context cancellation.
 //
-// The customizable statusLine (issue #60) is a status block pinned above
-// the input line, refreshed on session start, after each response, after
-// each tool call, and an optional timer — every trigger debounced at
-// 300ms via statusGen/statusRefreshMsg/statusRenderedMsg's generation
-// check, so a burst of triggers within the debounce window only actually
-// runs the (potentially external-process) render once.
+// The customizable statusLine (issue #60) is a status block rendered below
+// the input line, as the screen's bottom footer (issue #123), refreshed on
+// session start, after each response, after each tool call, and an
+// optional timer — every trigger debounced at 300ms via statusGen/
+// statusRefreshMsg/statusRenderedMsg's generation check, so a burst of
+// triggers within the debounce window only actually runs the (potentially
+// external-process) render once.
 //
 // Conversation-viewport scrolling (issue #59) is backed by bubbles/
 // viewport: PageUp/PageDown/Ctrl+U/Ctrl+D and the mouse wheel call the
@@ -452,7 +453,8 @@ func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*
 // layout currently on screen. The "-1" reserves the single blank
 // separator row baked into renderTranscript's trailing newline; the
 // statusLine block (when it has any rows) reserves one row per line on
-// top of that, pinned above the input per spec.
+// top of that, regardless of the block's own on-screen position (the
+// bottom footer, below the input).
 func (m *Model) syncViewportDims() {
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(max(0, m.height-m.input.Height()-1-len(m.statusLines)))
@@ -717,9 +719,12 @@ func (m Model) View() tea.View {
 	}
 
 	m.syncViewportDims()
-	content := m.viewport.View() + "\n" + m.renderStatusBlock() + m.input.View()
+	content := m.viewport.View() + "\n" + m.input.View()
 	if m.mention.active {
 		content += "\n" + renderMentionPopup(m.pal, m.mention)
+	}
+	if statusBlock := m.renderStatusBlock(); statusBlock != "" {
+		content += "\n" + statusBlock
 	}
 
 	v := tea.NewView(content)
@@ -727,12 +732,13 @@ func (m Model) View() tea.View {
 	v.BackgroundColor = lipgloss.Color(m.pal.Base)
 	v.MouseMode = tea.MouseModeCellMotion
 	// Offset the textarea's own cursor position by the viewport's fixed
-	// row count, the blank separator line, and the statusLine block's own
-	// row count. This doesn't account for line-wrapped rows (no
-	// width-aware wrapping yet), so a very long unwrapped line can throw
-	// it off; harmless beyond a cosmetic cursor-position glitch.
+	// row count and the blank separator line. The statusLine block renders
+	// below the input now, so its row count no longer factors in here.
+	// This doesn't account for line-wrapped rows (no width-aware wrapping
+	// yet), so a very long unwrapped line can throw it off; harmless
+	// beyond a cosmetic cursor-position glitch.
 	if cur := m.input.Cursor(); cur != nil {
-		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1+len(m.statusLines))
+		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1)
 	}
 	return v
 }
