@@ -169,10 +169,9 @@ func TestRenderStatusBlockJoinsRowsWithTrailingNewline(t *testing.T) {
 	}
 }
 
-// TestViewPlacesStatusBlockBelowInput covers the layout: the status block
-// sits below the input line as the screen's bottom footer, not
-// top-of-screen.
-func TestViewPlacesStatusBlockBelowInput(t *testing.T) {
+// TestViewPlacesStatusBlockAboveInput covers the spec's layout: the status
+// block sits between the transcript and the input line, not top-of-screen.
+func TestViewPlacesStatusBlockAboveInput(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{}, nil)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	m = next.(Model)
@@ -184,8 +183,8 @@ func TestViewPlacesStatusBlockBelowInput(t *testing.T) {
 	if statusIdx == -1 {
 		t.Fatal("View() content doesn't include the status block")
 	}
-	if inputIdx == -1 || statusIdx <= inputIdx {
-		t.Errorf("status block (at %d) is not positioned below the input line (at %d)", statusIdx, inputIdx)
+	if inputIdx == -1 || statusIdx >= inputIdx {
+		t.Errorf("status block (at %d) is not positioned above the input line (at %d)", statusIdx, inputIdx)
 	}
 }
 

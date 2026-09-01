@@ -5,9 +5,9 @@
 // session commands wired to the agent loop's context.Context
 // cancellation.
 //
-// The customizable statusLine (issue #60) is a status block pinned below
-// the input line (the screen's bottom footer), refreshed on session start,
-// after each response, after each tool call, and an optional timer — every trigger debounced at
+// The customizable statusLine (issue #60) is a status block pinned above
+// the input line, refreshed on session start, after each response, after
+// each tool call, and an optional timer — every trigger debounced at
 // 300ms via statusGen/statusRefreshMsg/statusRenderedMsg's generation
 // check, so a burst of triggers within the debounce window only actually
 // runs the (potentially external-process) render once.
@@ -436,8 +436,8 @@ func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*
 // AtBottom check scrollViewport relies on) needs to measure against the
 // layout currently on screen. The "-1" reserves the single blank
 // separator row baked into renderTranscript's trailing newline; the
-// statusLine block (when it has any rows) occupies one row per line on
-// top of that, pinned below the input as the screen's bottom footer.
+// statusLine block (when it has any rows) reserves one row per line on
+// top of that, pinned above the input per spec.
 func (m *Model) syncViewportDims() {
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(max(0, m.height-m.input.Height()-1-len(m.statusLines)))
@@ -668,24 +668,22 @@ func (m Model) View() tea.View {
 	}
 
 	m.syncViewportDims()
-	content := m.viewport.View() + "\n" + m.input.View()
+	content := m.viewport.View() + "\n" + m.renderStatusBlock() + m.input.View()
 	if m.mention.active {
 		content += "\n" + renderMentionPopup(m.pal, m.mention)
 	}
-	content += "\n" + m.renderStatusBlock()
 
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.BackgroundColor = lipgloss.Color(m.pal.Base)
 	v.MouseMode = tea.MouseModeCellMotion
 	// Offset the textarea's own cursor position by the viewport's fixed
-	// row count and the blank separator line between transcript and input.
-	// The statusLine block renders below the input, so it doesn't shift the
-	// cursor. This doesn't account for line-wrapped rows (no width-aware
-	// wrapping yet), so a very long unwrapped line can throw it off;
-	// harmless beyond a cosmetic cursor-position glitch.
+	// row count, the blank separator line, and the statusLine block's own
+	// row count. This doesn't account for line-wrapped rows (no
+	// width-aware wrapping yet), so a very long unwrapped line can throw
+	// it off; harmless beyond a cosmetic cursor-position glitch.
 	if cur := m.input.Cursor(); cur != nil {
-		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1)
+		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1+len(m.statusLines))
 	}
 	return v
 }
