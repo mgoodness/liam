@@ -513,9 +513,11 @@ func (m Model) cancelTurn() {
 	}
 }
 
-// submit handles an Enter press: /quit, /clear, /skills, /compact, and
-// /<skill-name> run immediately, an empty input or a turn already in
-// flight is a no-op, and anything else starts a new agent-loop turn.
+// submit handles an Enter press: /quit, /clear, /skills, /compact run
+// immediately; /<skill-name> force-activates the skill and, if any text
+// follows the name, immediately starts a turn with that text as the
+// message (skillCommandName); an empty input or a turn already in flight
+// is a no-op; anything else starts a new agent-loop turn.
 func (m Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" || m.busy {
@@ -547,9 +549,16 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	// the reserved commands above and can only be reached via /skills'
 	// listing + the model's own activate_skill — an accepted, narrow edge
 	// case rather than one worth complicating dispatch over.
-	if name, ok := skillCommandName(text); ok {
+	if name, rest, ok := skillCommandName(text); ok {
 		if s, found := skill.Find(m.skills, name); found {
-			return m.activateSkill(s)
+			m.activateSkill(s)
+			if rest == "" {
+				return m, nil
+			}
+			// Trailing text after the skill name becomes the first
+			// turn's message, sent immediately below — see
+			// skillCommandName's doc comment.
+			text = rest
 		}
 		// No matching skill: fall through and send text as an ordinary
 		// chat message, same as any other unrecognized input — liam has
