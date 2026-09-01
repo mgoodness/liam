@@ -72,8 +72,8 @@ func ModelCatalog(skills []Skill) []Skill {
 
 // Find looks up a skill by name across the full discovered set (including
 // ones excluded from ModelCatalog), for direct/force activation — used by
-// headless mode's -skill flag, and by the TUI's /skill slash command once
-// it exists.
+// headless mode's -skill flag and by the TUI's bare "/<skill-name>" slash
+// command.
 func Find(skills []Skill, name string) (Skill, bool) {
 	for _, s := range skills {
 		if s.Name == name {
