@@ -80,14 +80,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	// Issue #56: every AGENTS.md/LIAM.md found walking from the git root
 	// (or cwd) down to cwd, plus the personal $XDG_CONFIG_HOME/liam/LIAM.md,
-	// concatenated general-to-specific — the base of every turn's
-	// SystemPrompt, before any headless -skill force-activation is layered
-	// on top.
+	// concatenated general-to-specific.
 	projectInstructions, err := instructions.Load(cwd)
 	if err != nil {
 		fmt.Fprintf(stderr, "liam: %v\n", err)
 		return 1
 	}
+
+	// Issue #95: liam's fixed identity preamble goes first, ahead of issue
+	// #56's discovered project instructions — the base of every turn's
+	// SystemPrompt, before any headless -skill force-activation is layered
+	// on top.
+	systemPrompt := baseSystemPrompt(projectInstructions)
 
 	skills, err := discoverSkills(cwd, cfg, *prompt == "", stdin, stdout, stderr)
 	if err != nil {
@@ -148,20 +152,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			mcpLoader:    mcpLoader,
 			cfg:          cfg,
 			skills:       skills,
-			systemPrompt: projectInstructions,
+			systemPrompt: systemPrompt,
 			findSearcher: findSearcher,
 			cwd:          cwd,
 		}
 		return runInteractive(deps, stdin, stdout, stderr)
 	}
-	return runHeadless(loop, mcpLoader, cfg, *prompt, joinPrompt(projectInstructions, forceActivated), stdout, stderr)
+	return runHeadless(loop, mcpLoader, cfg, *prompt, joinPrompt(systemPrompt, forceActivated), stdout, stderr)
 }
 
-// joinPrompt joins project (issue #56's discovered AGENTS.md/LIAM.md
-// instructions, general) and skill (a -skill force-activated body, specific
-// to this one headless invocation) with a blank line, general-to-specific.
-// Either may be empty; joinPrompt skips it rather than leaving a stray
-// separator.
+// baseSystemPrompt combines liam's fixed identity preamble (issue #95) with
+// projectInstructions — issue #56's discovered AGENTS.md/LIAM.md content, or
+// "" if none was found — preamble first, general-to-specific, matching
+// joinPrompt's own separator convention. The preamble is always present,
+// even when projectInstructions is empty, and is composed here, outside
+// instructions.Load() entirely, so Load's per-file/total size caps (which
+// apply only to discovered files) can never truncate it.
+func baseSystemPrompt(projectInstructions string) string {
+	return joinPrompt(instructions.Preamble, projectInstructions)
+}
+
+// joinPrompt joins two general-to-specific SystemPrompt layers with a blank
+// line — used both by baseSystemPrompt (identity preamble, then issue #56's
+// discovered AGENTS.md/LIAM.md instructions) and by run() itself (that
+// combined base, then a -skill force-activated body, specific to one
+// headless invocation). Either side may be empty; joinPrompt skips it
+// rather than leaving a stray separator.
 func joinPrompt(project, skill string) string {
 	switch {
 	case project == "":
@@ -247,7 +263,7 @@ type interactiveDeps struct {
 	mcpLoader    mcp.ToolLoader
 	cfg          config.Config
 	skills       []skill.Skill
-	systemPrompt string // issue #56's discovered AGENTS.md/LIAM.md instructions
+	systemPrompt string // issue #95's identity preamble + issue #56's discovered AGENTS.md/LIAM.md instructions (baseSystemPrompt)
 	findSearcher tool.FindSearcher
 	cwd          string // issue #60's statusLine "cwd" field and built-in git info
 }
@@ -289,8 +305,9 @@ func runInteractive(deps interactiveDeps, stdin io.Reader, stdout, stderr io.Wri
 // assistant text and tool-call/result lines to stdout as they arrive, and
 // noting the actually-used model to stderr once per response. systemPrompt
 // becomes the turn's SystemPrompt as-is — the caller (run) has already
-// combined issue #56's discovered project instructions with any -skill
-// force-activated body via joinPrompt. mcpLoader's tools are waited for
+// combined issue #95's identity preamble and issue #56's discovered project
+// instructions (baseSystemPrompt) with any -skill force-activated body via
+// joinPrompt. mcpLoader's tools are waited for
 // and merged into loop.Tools before the turn runs — headless mode has
 // exactly one turn, so this trivially satisfies "the first actual model
 // call blocks on MCP load completion."

@@ -15,6 +15,7 @@ import (
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/hook"
+	"github.com/mgoodness/liam/internal/instructions"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/tool"
 )
@@ -279,6 +280,89 @@ func TestJoinPromptCombinesGeneralToSpecific(t *testing.T) {
 				t.Errorf("joinPrompt(%q, %q) = %q, want %q", tt.project, tt.skill, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBaseSystemPromptPrependsIdentityPreamble covers issue #95's headline
+// ordering requirement: liam's fixed identity preamble comes first, ahead
+// of discovered project instructions, separated by the same blank-line
+// convention joinPrompt uses elsewhere.
+func TestBaseSystemPromptPrependsIdentityPreamble(t *testing.T) {
+	got := baseSystemPrompt("project instructions")
+	want := instructions.Preamble + "\n\nproject instructions"
+	if got != want {
+		t.Errorf("baseSystemPrompt() = %q, want %q", got, want)
+	}
+}
+
+// TestBaseSystemPromptPresentWithoutProjectInstructions covers the "no
+// AGENTS.md/LIAM.md anywhere" case: the preamble must still be sent in
+// full, unlike Load()'s own empty-string result in that case.
+func TestBaseSystemPromptPresentWithoutProjectInstructions(t *testing.T) {
+	got := baseSystemPrompt("")
+	if got != instructions.Preamble {
+		t.Errorf("baseSystemPrompt(\"\") = %q, want just the identity preamble", got)
+	}
+}
+
+// TestBaseSystemPromptSurvivesLargeProjectInstructions guards the preamble
+// against being crowded out by instructions.Load()'s own 32 KiB total cap:
+// baseSystemPrompt composes after Load returns, so a capped (or otherwise
+// large) project-instructions string must not truncate the preamble that
+// precedes it.
+func TestBaseSystemPromptSurvivesLargeProjectInstructions(t *testing.T) {
+	large := strings.Repeat("x", 40*1024)
+	got := baseSystemPrompt(large)
+	if !strings.HasPrefix(got, instructions.Preamble+"\n\n") {
+		t.Error("baseSystemPrompt() with large project instructions did not keep the identity preamble intact and first")
+	}
+}
+
+// TestBaseSystemPromptSurvivesInstructionsLoadTotalCap is issue #95's AC2
+// exercised end-to-end through the real instructions.Load(), not just a
+// synthetic string: a set of project instruction files large enough to hit
+// Load's own 32 KiB total cap must not crowd out or truncate the identity
+// preamble composed in ahead of it by baseSystemPrompt. The fixture mirrors
+// internal/instructions's own TestLoadEnforcesTotalCap: four 10 KiB files
+// (each truncated to Load's 8 KiB per-file cap first) comfortably exceed
+// the 32 KiB total cap once assembled.
+func TestBaseSystemPromptSurvivesInstructionsLoadTotalCap(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	xdgConfigHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+
+	writeBig := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", 10*1024)), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeBig(filepath.Join(xdgConfigHome, "liam", "LIAM.md"))
+
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir .git: %v", err)
+	}
+	writeBig(filepath.Join(root, "AGENTS.md"))
+	writeBig(filepath.Join(root, "LIAM.md"))
+	sub := filepath.Join(root, "sub")
+	writeBig(filepath.Join(sub, "AGENTS.md"))
+
+	loaded, err := instructions.Load(sub)
+	if err != nil {
+		t.Fatalf("instructions.Load: %v", err)
+	}
+	const totalCap = 32 * 1024 // instructions.go's unexported maxTotalBytes
+	if len(loaded) != totalCap {
+		t.Fatalf("len(instructions.Load()) = %d, want %d (Load's total cap) — test fixture assumption broke", len(loaded), totalCap)
+	}
+
+	got := baseSystemPrompt(loaded)
+	if !strings.HasPrefix(got, instructions.Preamble+"\n\n") {
+		t.Error("baseSystemPrompt() did not keep the identity preamble intact and first against a Load() result that hit the 32 KiB total cap")
 	}
 }
 
