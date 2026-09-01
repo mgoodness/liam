@@ -41,10 +41,10 @@ func (f *multiCallProvider) Stream(_ context.Context, _ provider.Request) iter.S
 
 // drain repeatedly invokes pending commands and feeds each resulting Msg
 // back through Update, exactly as a real tea.Program would, until a
-// turnDoneMsg is processed — at which point it returns immediately,
-// leaving any other still-pending commands (e.g. a batched statusLine
-// refresh's debounce tick) uninvoked, same as every other test in this
-// package that never drives Update far enough to reach one. A tea.
+// turnDoneMsg or compactDoneMsg is processed — at which point it returns
+// immediately, leaving any other still-pending commands (e.g. a batched
+// statusLine refresh's debounce tick) uninvoked, same as every other test
+// in this package that never drives Update far enough to reach one. A tea.
 // BatchMsg (concurrent commands returned via tea.Batch, e.g. streamMsg's
 // event-wait batched with a statusLine refresh trigger) is unpacked into
 // the same worklist rather than fed to Update directly, mirroring how the
@@ -67,7 +67,8 @@ func drain(t *testing.T, m Model, cmd tea.Cmd) Model {
 		}
 		next, newCmd := m.Update(msg)
 		m = next.(Model)
-		if _, ok := msg.(turnDoneMsg); ok {
+		switch msg.(type) {
+		case turnDoneMsg, compactDoneMsg:
 			return m
 		}
 		if newCmd != nil {

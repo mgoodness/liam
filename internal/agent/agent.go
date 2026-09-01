@@ -113,7 +113,7 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 			// again. A failed or no-op compaction leaves err as the
 			// ContextTooLong failure, falling through to the normal error
 			// path below.
-			if recompacted, ok := l.compactMessages(ctx, messages, req.Model); ok {
+			if recompacted, ok := l.Compact(ctx, messages, req.Model); ok {
 				messages = recompacted
 				turnReq.Messages = messages
 				text, calls, err = l.streamTurn(ctx, turnReq, onEvent)
@@ -211,7 +211,7 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 // Unavailable auto-retry with jittered exponential backoff (up to
 // maxStreamAttempts total attempts); every other Kind — including
 // ContextTooLong, whose own compact-then-retry-once handling lives one
-// level up, in Run (see isContextTooLong/compactMessages) — surfaces on the
+// level up, in Run (see isContextTooLong/Compact) — surfaces on the
 // first attempt here, like a non-ProviderError or an unclassified error
 // would. Retries are invisible to the model: a failed attempt's
 // accumulated text/calls are discarded and a fresh attempt starts, so only
@@ -259,7 +259,7 @@ func (l Loop) streamTurn(ctx context.Context, req provider.Request, onEvent func
 // deliberately excluded here even though issue #54 does now retry it:
 // backoff-and-resend would just resubmit the identical oversized request,
 // so that case gets its own compact-then-retry-once handling in Run
-// instead (see isContextTooLong/compactMessages), which needs to rewrite
+// instead (see isContextTooLong/Compact), which needs to rewrite
 // the conversation, not just wait and resend.
 func isRetryable(err error) bool {
 	var perr *provider.ProviderError
@@ -294,18 +294,21 @@ func (l Loop) autoCompactIfNeeded(ctx context.Context, messages []provider.Messa
 	if err != nil || pct < autoCompactThreshold {
 		return messages
 	}
-	if compacted, ok := l.compactMessages(ctx, messages, model); ok {
+	if compacted, ok := l.Compact(ctx, messages, model); ok {
 		return compacted
 	}
 	return messages
 }
 
-// compactMessages runs the compact package's mechanism against messages,
-// resetting l.Session's tracker (if set) on success so its reported
-// percentage goes back to unset until the next DoneEvent repopulates it.
-// ok reports whether compaction actually condensed anything; on a false or
-// failed result the caller should keep using its own messages unchanged.
-func (l Loop) compactMessages(ctx context.Context, messages []provider.Message, model string) ([]provider.Message, bool) {
+// Compact runs the compact package's mechanism against messages, resetting
+// l.Session's tracker (if set) on success so its reported percentage goes
+// back to unset until the next DoneEvent repopulates it. ok reports whether
+// compaction actually condensed anything; on a false or failed result the
+// caller should keep using its own messages unchanged. This is the single
+// compaction path shared by the automatic (autoCompactIfNeeded) and
+// reactive (Run's ContextTooLong handling) triggers, and by a caller-driven
+// manual trigger (e.g. the TUI's /compact command).
+func (l Loop) Compact(ctx context.Context, messages []provider.Message, model string) ([]provider.Message, bool) {
 	result, compacted, err := compact.Compact(ctx, l.Provider, model, messages, l.KeepRecentTurns)
 	if err != nil || !compacted {
 		return messages, false

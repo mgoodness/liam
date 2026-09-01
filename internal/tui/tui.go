@@ -1,9 +1,9 @@
 // Package tui implements liam's interactive Bubbletea shell: the
 // stacked-stream layout (conversation scrollback with inline tool calls,
 // a bubbles/textarea input line), Catppuccin Frappe/Latte theming
-// auto-detected at startup, and the /quit, /clear, /skills, /<skill-name>,
-// Escape-cancel session commands wired to the agent loop's context.Context
-// cancellation.
+// auto-detected at startup, and the /quit, /clear, /skills, /compact,
+// /<skill-name>, Escape-cancel session commands wired to the agent loop's
+// context.Context cancellation.
 //
 // The customizable statusLine (issue #60) is a status block pinned above
 // the input line, refreshed on session start, after each response, after
@@ -299,6 +299,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, m.requestStatusRefresh()
 
+	case compactDoneMsg:
+		m.busy = false
+		m.cancel = nil
+		switch {
+		case msg.canceled:
+			m.lines = append(m.lines, line{role: "system", text: "[interrupted]"})
+		case msg.ok:
+			m.sess.Messages = msg.messages
+			m.lines = append(m.lines, line{role: "info", text: "Conversation compacted."})
+		default:
+			m.lines = append(m.lines, line{role: "info", text: "Nothing to compact."})
+		}
+		m.refreshViewport()
+		return m, m.requestStatusRefresh()
+
 	case systemLineMsg:
 		m.lines = append(m.lines, line{role: "system", text: msg.text})
 		m.refreshViewport()
@@ -494,9 +509,9 @@ func (m Model) cancelTurn() {
 	}
 }
 
-// submit handles an Enter press: /quit, /clear, /skills, and /<skill-name>
-// run immediately, an empty input or a turn already in flight is a no-op,
-// and anything else starts a new agent-loop turn.
+// submit handles an Enter press: /quit, /clear, /skills, /compact, and
+// /<skill-name> run immediately, an empty input or a turn already in
+// flight is a no-op, and anything else starts a new agent-loop turn.
 func (m Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" || m.busy {
@@ -521,11 +536,13 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills)})
 		m.refreshViewport()
 		return m, nil
+	case "/compact":
+		return m.compact()
 	}
-	// A skill named "quit", "clear", or "skills" is shadowed by the three
-	// reserved commands above and can only be reached via /skills' listing
-	// + the model's own activate_skill — an accepted, narrow edge case
-	// rather than one worth complicating dispatch over.
+	// A skill named "quit", "clear", "skills", or "compact" is shadowed by
+	// the reserved commands above and can only be reached via /skills'
+	// listing + the model's own activate_skill — an accepted, narrow edge
+	// case rather than one worth complicating dispatch over.
 	if name, ok := skillCommandName(text); ok {
 		if s, found := skill.Find(m.skills, name); found {
 			return m.activateSkill(s)
