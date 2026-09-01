@@ -100,9 +100,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	// -skill force-activates a skill directly, bypassing model judgment —
-	// the underlying mechanism the TUI's future /skill slash command will
-	// also use (ticket 16/17). It's headless-only for now: there's no
-	// interactive surface to trigger it from yet.
+	// the same mechanism the TUI's own bare "/<skill-name>" slash command
+	// uses (internal/tui's activateSkill). This flag is headless mode's
+	// equivalent entry point, since -p runs never reach the TUI.
 	var forceActivated string
 	if *skillName != "" {
 		if *prompt == "" {

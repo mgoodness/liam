@@ -1,8 +1,8 @@
 // Package tui implements liam's interactive Bubbletea shell: the
 // stacked-stream layout (conversation scrollback with inline tool calls,
 // a bubbles/textarea input line), Catppuccin Frappe/Latte theming
-// auto-detected at startup, and the /quit, /clear, /skills, Escape-cancel
-// session commands wired to the agent loop's context.Context
+// auto-detected at startup, and the /quit, /clear, /skills, /<skill-name>,
+// Escape-cancel session commands wired to the agent loop's context.Context
 // cancellation.
 //
 // The customizable statusLine (issue #60) is a status block pinned above
@@ -494,9 +494,9 @@ func (m Model) cancelTurn() {
 	}
 }
 
-// submit handles an Enter press: /quit, /clear, and /skills run
-// immediately, an empty input or a turn already in flight is a no-op, and
-// anything else starts a new agent-loop turn.
+// submit handles an Enter press: /quit, /clear, /skills, and /<skill-name>
+// run immediately, an empty input or a turn already in flight is a no-op,
+// and anything else starts a new agent-loop turn.
 func (m Model) submit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" || m.busy {
@@ -521,6 +521,20 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills)})
 		m.refreshViewport()
 		return m, nil
+	}
+	// A skill named "quit", "clear", or "skills" is shadowed by the three
+	// reserved commands above and can only be reached via /skills' listing
+	// + the model's own activate_skill — an accepted, narrow edge case
+	// rather than one worth complicating dispatch over.
+	if name, ok := skillCommandName(text); ok {
+		if s, found := skill.Find(m.skills, name); found {
+			return m.activateSkill(s)
+		}
+		// No matching skill: fall through and send text as an ordinary
+		// chat message, same as any other unrecognized input — liam has
+		// no fixed slash-command registry to validate against, so a
+		// leading "/" alone isn't enough to treat this as a failed
+		// command rather than a message that happens to start with one.
 	}
 
 	m.lines = append(m.lines, line{role: "user", text: text})
@@ -553,6 +567,39 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	go runTurn(ctx, loop, req, events, loader, waitForMCP)
 
 	return m, waitForMsg(events)
+}
+
+// skillCommandName reports the skill name a bare "/<name>" input would
+// activate — ticket #16's decided force-activation path, typed the same
+// way Claude Code itself invokes a skill (a bare slash command, no
+// separate "skill" keyword). Only the exact single token after the slash
+// is taken as the name; any text after a space is currently discarded
+// (skill activation carries no arguments of its own — the user's next
+// message is a separate turn).
+func skillCommandName(text string) (string, bool) {
+	rest, ok := strings.CutPrefix(text, "/")
+	if !ok {
+		return "", false
+	}
+	name, _, _ := strings.Cut(rest, " ")
+	return name, name != ""
+}
+
+// activateSkill force-activates s, bypassing model judgment entirely
+// (unlike activate_skill, which the model calls on its own) by folding its
+// body into systemPrompt — the same mechanism headless mode's -skill flag
+// already uses to force-activate a skill for an entire run. No turn is
+// started, matching /skills' own no-turn convention; the activated skill
+// takes effect starting with the next turn the user submits.
+func (m Model) activateSkill(s skill.Skill) (tea.Model, tea.Cmd) {
+	if m.systemPrompt == "" {
+		m.systemPrompt = s.Body
+	} else {
+		m.systemPrompt = m.systemPrompt + "\n\n" + s.Body
+	}
+	m.lines = append(m.lines, line{role: "info", text: fmt.Sprintf("Activated skill %q.", s.Name)})
+	m.refreshViewport()
+	return m, nil
 }
 
 // runTurn drives one agent.Loop turn in the background, forwarding every
