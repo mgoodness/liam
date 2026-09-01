@@ -100,5 +100,21 @@ type SkillsConfig struct {
 // PluginsConfig is a stub, populated by a later ticket.
 type PluginsConfig struct{}
 
-// StatusLineConfig is a stub, populated by a later ticket.
-type StatusLineConfig struct{}
+// StatusLineConfig configures the customizable status block pinned above
+// the input line in interactive mode: an external-command hook, the same
+// shape as HooksConfig, modeled directly on Claude Code's own statusLine
+// primitive.
+type StatusLineConfig struct {
+	// Command, when set, is run via "sh -c" and receives session JSON on
+	// stdin; each line it prints to stdout becomes one status-block row.
+	// Unset (the default) uses the built-in renderer (identity line +
+	// metrics bar).
+	Command string `json:"command,omitempty"`
+	// RefreshInterval adds a periodic timer refresh, in milliseconds,
+	// alongside the status block's other refresh triggers (session start,
+	// after each response, after each tool call) — every trigger,
+	// including this one, is debounced at 300ms. 0 (the default) disables
+	// the timer; a configured positive value below the 1s floor is raised
+	// to it (see statusline.RefreshInterval).
+	RefreshInterval int `json:"refreshInterval,omitempty"`
+}

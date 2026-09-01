@@ -150,6 +150,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			skills:       skills,
 			systemPrompt: projectInstructions,
 			findSearcher: findSearcher,
+			cwd:          cwd,
 		}
 		return runInteractive(deps, stdin, stdout, stderr)
 	}
@@ -248,6 +249,7 @@ type interactiveDeps struct {
 	skills       []skill.Skill
 	systemPrompt string // issue #56's discovered AGENTS.md/LIAM.md instructions
 	findSearcher tool.FindSearcher
+	cwd          string // issue #60's statusLine "cwd" field and built-in git info
 }
 
 // runInteractive launches liam's Bubbletea TUI. deps.loop.Hooks' sessionEnd,
@@ -262,12 +264,15 @@ type interactiveDeps struct {
 // deps.systemPrompt is carried on every turn via tui.Model.WithSystemPrompt.
 // deps.findSearcher backs the "@"-file-reference autocomplete popup (issue
 // #58) via tui.Model.WithFindSearcher — the same searcher findGrepSearchers
-// picked for the find/grep tools themselves.
+// picked for the find/grep tools themselves. deps.cwd feeds statusLine's
+// (issue #60) "cwd" field and the built-in renderer's git branch/dirty
+// lookup via tui.Model.WithCwd.
 func runInteractive(deps interactiveDeps, stdin io.Reader, stdout, stderr io.Writer) int {
 	m := tui.New(deps.loop, deps.cfg, deps.skills).
 		WithMCPLoader(deps.mcpLoader).
 		WithSystemPrompt(deps.systemPrompt).
-		WithFindSearcher(deps.findSearcher)
+		WithFindSearcher(deps.findSearcher).
+		WithCwd(deps.cwd)
 	if deps.loop.Hooks != nil {
 		defer deps.loop.Hooks.SessionEnd(context.Background())
 	}

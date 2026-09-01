@@ -5,9 +5,12 @@
 // session commands wired to the agent loop's context.Context
 // cancellation.
 //
-// The customizable statusLine is a later ticket (#60) — this package
-// renders the full transcript with no status block, matching the
-// "Variant A" prototype layout minus that one addition.
+// The customizable statusLine (issue #60) is a status block pinned above
+// the input line, refreshed on session start, after each response, after
+// each tool call, and an optional timer — every trigger debounced at
+// 300ms via statusGen/statusRefreshMsg/statusRenderedMsg's generation
+// check, so a burst of triggers within the debounce window only actually
+// runs the (potentially external-process) render once.
 //
 // Conversation-viewport scrolling (issue #59) is backed by bubbles/
 // viewport: PageUp/PageDown/Ctrl+U/Ctrl+D and the mouse wheel call the
@@ -23,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -37,6 +41,7 @@ import (
 	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/skill"
+	"github.com/mgoodness/liam/internal/statusline"
 	"github.com/mgoodness/liam/internal/theme"
 	"github.com/mgoodness/liam/internal/tool"
 )
@@ -101,6 +106,14 @@ type Model struct {
 	findSearcher tool.FindSearcher // set via WithFindSearcher; nil disables "@"-file-reference autocomplete
 	hist         history           // Up/Down input-recall stack (issue #58), session-only
 	mention      mentionState      // in-progress "@"-file-reference autocomplete, if any
+
+	cwd string // set via WithCwd; statusLine's "cwd" field and the built-in renderer's git-info root
+
+	statusCfg      config.StatusLineConfig
+	statusTracker  *statusline.Tracker // tool-call count/duration, reset alongside sess.Clear() on /clear
+	statusLines    []string            // the status block's current rows, refreshed asynchronously
+	statusGen      int                 // bumped by requestStatusRefresh; the debounce/staleness generation counter
+	statusDebounce time.Duration       // defaultStatusDebounce in New(); tests may override to avoid a real sleep
 }
 
 // WithMCPLoader attaches loader, whose tools are waited for (bounded by
@@ -130,6 +143,16 @@ func (m Model) WithSystemPrompt(prompt string) Model {
 // existing New(...) call site.
 func (m Model) WithFindSearcher(searcher tool.FindSearcher) Model {
 	m.findSearcher = searcher
+	return m
+}
+
+// WithCwd attaches cwd — the harness's working directory — used as
+// statusLine's "cwd" field and to resolve git branch/dirty status for the
+// built-in default renderer. A zero-value Model (no WithCwd call) leaves
+// it "", matching every existing New(...) call site: the built-in
+// renderer simply omits the cwd segment and git info then.
+func (m Model) WithCwd(cwd string) Model {
+	m.cwd = cwd
 	return m
 }
 
@@ -166,6 +189,11 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 		viewport:     viewport.New(),
 		followBottom: true,
 		streaming:    &strings.Builder{},
+
+		statusCfg:      cfg.StatusLine,
+		statusTracker:  statusline.NewTracker(),
+		statusGen:      1, // Init() schedules gen 1's debounce tick directly, without mutating a throwaway Model copy
+		statusDebounce: defaultStatusDebounce,
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
@@ -209,13 +237,24 @@ func newTextarea() textarea.Model {
 	return ta
 }
 
-// Init requests the terminal's background color for theme auto-detection,
-// unless theme.mode already forces dark/light.
+// Init requests the terminal's background color for theme auto-detection
+// (unless theme.mode already forces dark/light), and kicks off statusLine's
+// session-start refresh trigger — plus its optional periodic timer, when
+// config.StatusLineConfig.RefreshInterval is configured. m.statusGen is
+// already 1 by construction (see New()), so this schedules that same
+// generation's debounce tick directly rather than going through
+// requestStatusRefresh: Init has a value receiver, and any mutation it
+// made to its own m would be discarded rather than persisted into the
+// Model Bubbletea actually keeps.
 func (m Model) Init() tea.Cmd {
-	if m.themeMode == "dark" || m.themeMode == "light" {
-		return nil
+	cmds := []tea.Cmd{m.statusTick(m.statusGen)}
+	if m.themeMode != "dark" && m.themeMode != "light" {
+		cmds = append(cmds, tea.RequestBackgroundColor)
 	}
-	return tea.RequestBackgroundColor
+	if t := m.scheduleStatusTimer(); t != nil {
+		cmds = append(cmds, t)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -243,19 +282,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case streamMsg:
-		m.handleEvent(msg.ev)
+		refresh := m.handleEvent(msg.ev)
 		m.refreshViewport()
-		return m, waitForMsg(m.events)
+		cmd := waitForMsg(m.events)
+		if refresh {
+			// Batched, not run in the linear streamMsg/waitForMsg chain
+			// itself: the refresh trigger ("after each response"/"after
+			// each tool call") is independent of waiting for the next
+			// provider.Event, and must never delay it.
+			cmd = tea.Batch(cmd, m.requestStatusRefresh())
+		}
+		return m, cmd
 
 	case turnDoneMsg:
 		m.finishTurn(msg.messages, msg.err)
 		m.refreshViewport()
-		return m, nil
+		return m, m.requestStatusRefresh()
 
 	case systemLineMsg:
 		m.lines = append(m.lines, line{role: "system", text: msg.text})
 		m.refreshViewport()
 		return m, waitForMsg(m.events)
+
+	case statusRefreshMsg:
+		if msg.gen != m.statusGen {
+			return m, nil // superseded by a newer request — the debounce itself
+		}
+		return m, m.statusRefreshCmd(msg.gen)
+
+	case statusRenderedMsg:
+		if msg.gen != m.statusGen {
+			return m, nil // a newer refresh was requested while this one was rendering
+		}
+		m.statusLines = msg.lines
+		if msg.warn != "" {
+			m.lines = append(m.lines, line{role: "system", text: msg.warn})
+		}
+		m.refreshViewport()
+		return m, nil
+
+	case statusTimerMsg:
+		return m, tea.Batch(m.requestStatusRefresh(), m.scheduleStatusTimer())
 	}
 
 	var cmd tea.Cmd
@@ -368,10 +435,12 @@ func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*
 // changes as the user types multi-line input, and paging math (and the
 // AtBottom check scrollViewport relies on) needs to measure against the
 // layout currently on screen. The "-1" reserves the single blank
-// separator row baked into renderTranscript's trailing newline.
+// separator row baked into renderTranscript's trailing newline; the
+// statusLine block (when it has any rows) reserves one row per line on
+// top of that, pinned above the input per spec.
 func (m *Model) syncViewportDims() {
 	m.viewport.SetWidth(m.width)
-	m.viewport.SetHeight(max(0, m.height-m.input.Height()-1))
+	m.viewport.SetHeight(max(0, m.height-m.input.Height()-1-len(m.statusLines)))
 }
 
 // refreshViewport rebuilds the viewport's content from the current
@@ -443,10 +512,11 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		endSession(m.loop)
 		m.sess.Clear()
 		startSession(m.loop, m.sess)
+		m.statusTracker.Reset()
 		m.lines = nil
 		m.streaming.Reset()
 		m.refreshViewport()
-		return m, nil
+		return m, m.requestStatusRefresh()
 	case "/skills":
 		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills)})
 		m.refreshViewport()
@@ -518,7 +588,11 @@ func waitForMsg(ch <-chan tea.Msg) tea.Cmd {
 // text (it belongs to the same assistant turn as the call), and a tool
 // result renders as its own inline line via the shared render.ToolCall
 // convention.
-func (m *Model) handleEvent(ev provider.Event) {
+// handleEvent reports whether ev should trigger a statusLine refresh — true
+// for a completed tool call and a completed response, matching the spec's
+// "after each tool call"/"after each response" triggers; a text delta or a
+// requested-but-not-yet-resolved tool call don't.
+func (m *Model) handleEvent(ev provider.Event) bool {
 	switch e := ev.(type) {
 	case provider.TextDeltaEvent:
 		m.streaming.WriteString(e.Text)
@@ -527,9 +601,13 @@ func (m *Model) handleEvent(ev provider.Event) {
 	case provider.ToolResultEvent:
 		m.flushStreaming()
 		m.lines = append(m.lines, line{role: "tool", text: render.ToolCall(e.Name, e.ArgsJSON, e.Content, e.IsError)})
+		m.statusTracker.RecordToolCall()
+		return true
 	case provider.DoneEvent:
 		m.sess.Record(e.ModelUsed, e.Usage)
+		return true
 	}
+	return false
 }
 
 func (m *Model) flushStreaming() {
@@ -590,7 +668,7 @@ func (m Model) View() tea.View {
 	}
 
 	m.syncViewportDims()
-	content := m.viewport.View() + "\n" + m.input.View()
+	content := m.viewport.View() + "\n" + m.renderStatusBlock() + m.input.View()
 	if m.mention.active {
 		content += "\n" + renderMentionPopup(m.pal, m.mention)
 	}
@@ -600,12 +678,12 @@ func (m Model) View() tea.View {
 	v.BackgroundColor = lipgloss.Color(m.pal.Base)
 	v.MouseMode = tea.MouseModeCellMotion
 	// Offset the textarea's own cursor position by the viewport's fixed
-	// row count, plus the blank separator line. This doesn't account for
-	// line-wrapped rows (no width-aware wrapping yet), so a very long
-	// unwrapped line can throw it off; harmless beyond a cosmetic
-	// cursor-position glitch.
+	// row count, the blank separator line, and the statusLine block's own
+	// row count. This doesn't account for line-wrapped rows (no
+	// width-aware wrapping yet), so a very long unwrapped line can throw
+	// it off; harmless beyond a cosmetic cursor-position glitch.
 	if cur := m.input.Cursor(); cur != nil {
-		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1)
+		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1+len(m.statusLines))
 	}
 	return v
 }

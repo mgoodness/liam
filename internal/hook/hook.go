@@ -7,16 +7,15 @@
 package hook
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/mgoodness/liam/internal/config"
+	"github.com/mgoodness/liam/internal/shellrun"
 )
 
 // Lifecycle identifies one of the 4 hook lifecycle points.
@@ -182,45 +181,32 @@ func (r *Runner) run(ctx context.Context, hc config.HookConfig, lc Lifecycle, ti
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(runCtx, "sh", "-c", hc.Command)
-	if r.Cwd != "" {
-		cmd.Dir = r.Cwd
-	}
-	cmd.Stdin = bytes.NewReader(stdin)
-	cmd.Env = append(cmd.Environ(), envFor(lc, r.SessionID, r.Cwd, ti)...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	res := shellrun.Run(runCtx, hc.Command, stdin, r.Cwd, envFor(lc, r.SessionID, r.Cwd, ti))
 
-	runErr := cmd.Run()
 	if runCtx.Err() != nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return outcome{err: fmt.Errorf("timed out after %dms", hc.TimeoutMs)}
 	}
-	if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			// sh's own 127/126 convention for "command not found"/"found but
-			// not executable" is itself a fail-open condition (ADR-0002's
-			// "whose command can't be found"), not a policy verdict — sh
-			// never got to run the configured command at all.
-			if code := exitErr.ExitCode(); code == 127 || code == 126 {
-				return outcome{err: fmt.Errorf("command not found or not executable (exit %d): %s", code, strings.TrimSpace(stderr.String()))}
-			}
-			// ExitCode() reports -1 when the process was terminated by a
-			// signal rather than returning normally (os/exec's documented
-			// behavior) — ADR-0002's "crashes before exiting" fail-open
-			// case, not a policy verdict.
-			if exitErr.ExitCode() == -1 {
-				return outcome{err: fmt.Errorf("hook process terminated abnormally: %s", strings.TrimSpace(stderr.String()))}
-			}
-			// Otherwise the process ran and returned — a non-zero exit is a
-			// real verdict, not a fail-open condition.
-			return outcome{exitCode: exitErr.ExitCode(), stdout: stdout.String(), stderr: stderr.String()}
-		}
+	if res.Err != nil {
 		// Couldn't even start sh itself.
-		return outcome{err: runErr}
+		return outcome{err: res.Err}
 	}
-	return outcome{stdout: stdout.String(), stderr: stderr.String()}
+	// sh's own 127/126 convention for "command not found"/"found but not
+	// executable" is itself a fail-open condition (ADR-0002's "whose
+	// command can't be found"), not a policy verdict — sh never got to
+	// run the configured command at all.
+	if code := res.ExitCode; code == 127 || code == 126 {
+		return outcome{err: fmt.Errorf("command not found or not executable (exit %d): %s", code, strings.TrimSpace(res.Stderr))}
+	}
+	// ExitCode() reports -1 when the process was terminated by a signal
+	// rather than returning normally (os/exec's documented behavior) —
+	// ADR-0002's "crashes before exiting" fail-open case, not a policy
+	// verdict.
+	if res.ExitCode == -1 {
+		return outcome{err: fmt.Errorf("hook process terminated abnormally: %s", strings.TrimSpace(res.Stderr))}
+	}
+	// Otherwise the process ran and returned — a non-zero exit is a real
+	// verdict, not a fail-open condition.
+	return outcome{exitCode: res.ExitCode, stdout: res.Stdout, stderr: res.Stderr}
 }
 
 // toolInfo is the "tool" field of a hook's stdin JSON payload.
