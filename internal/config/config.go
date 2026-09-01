@@ -100,10 +100,10 @@ type SkillsConfig struct {
 // PluginsConfig is a stub, populated by a later ticket.
 type PluginsConfig struct{}
 
-// StatusLineConfig configures the customizable status block pinned above
-// the input line in interactive mode: an external-command hook, the same
-// shape as HooksConfig, modeled directly on Claude Code's own statusLine
-// primitive.
+// StatusLineConfig configures the customizable status block pinned below
+// the input line (the interactive screen's bottom footer): an
+// external-command hook, the same shape as HooksConfig, modeled directly
+// on Claude Code's own statusLine primitive.
 type StatusLineConfig struct {
 	// Command, when set, is run via "sh -c" and receives session JSON on
 	// stdin; each line it prints to stdout becomes one status-block row.

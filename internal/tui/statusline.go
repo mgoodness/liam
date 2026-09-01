@@ -1,8 +1,9 @@
 package tui
 
 // This file holds the customizable statusLine (issue #60): a status block
-// pinned above the input line, refreshed on session start, after each
-// response, after each tool call, and an optional timer — every trigger
+// pinned below the input line (the screen's bottom footer), refreshed on
+// session start, after each response, after each tool call, and an
+// optional timer — every trigger
 // debounced at 300ms via statusGen/statusRefreshMsg/statusRenderedMsg's
 // generation check, so a burst of triggers within the debounce window
 // only actually runs the (potentially external-process) render once.
