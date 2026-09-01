@@ -14,7 +14,9 @@ import (
 // Claude Code invokes a skill — a bare "/<name>", no separate "skill"
 // keyword. It should inject the named skill's body into the conversation
 // the same way headless mode's -skill flag does, without requiring the
-// model to call activate_skill on its own.
+// model to call activate_skill on its own — and silently, with no
+// confirmation line of its own (the activated skill's effect on the next
+// turn is the only visible sign).
 func TestSubmitBareSlashNameForceActivatesSkill(t *testing.T) {
 	skills := []skill.Skill{
 		{Name: "implement", Description: "Implement a feature.", Body: "IMPLEMENT SKILL BODY"},
@@ -31,11 +33,39 @@ func TestSubmitBareSlashNameForceActivatesSkill(t *testing.T) {
 	if !strings.Contains(mm.systemPrompt, "IMPLEMENT SKILL BODY") {
 		t.Errorf("systemPrompt = %q, want it to contain the activated skill's body", mm.systemPrompt)
 	}
-	if len(mm.lines) != 1 || mm.lines[0].role != "info" {
-		t.Fatalf("lines = %+v, want a single info line confirming activation", mm.lines)
+	if len(mm.lines) != 0 {
+		t.Errorf("lines = %+v, want none — activation renders no confirmation line", mm.lines)
 	}
-	if !strings.Contains(mm.lines[0].text, "implement") {
-		t.Errorf("lines[0].text = %q, want it to mention the activated skill's name", mm.lines[0].text)
+}
+
+// TestSubmitBareSlashNameWithTrailingTextStartsATurn is a regression test:
+// "/implement #123" previously activated the skill and printed the
+// confirmation line, but nothing else happened — "#123" was silently
+// discarded instead of being sent as the first turn's message. Trailing
+// text after the skill name must now start a turn immediately, mirroring
+// how Claude Code's own slash commands pass arguments through.
+func TestSubmitBareSlashNameWithTrailingTextStartsATurn(t *testing.T) {
+	fp := &capturingProvider{}
+	skills := []skill.Skill{
+		{Name: "implement", Description: "Implement a feature.", Body: "IMPLEMENT SKILL BODY"},
+	}
+	m := New(agent.Loop{Provider: fp}, config.Config{}, skills)
+	m.input.SetValue("/implement #123")
+
+	next, cmd := m.submit()
+	if cmd == nil {
+		t.Fatal("submit(\"/implement #123\") returned a nil cmd, want a turn to start")
+	}
+	mm := drain(t, next.(Model), cmd)
+
+	if !strings.Contains(mm.systemPrompt, "IMPLEMENT SKILL BODY") {
+		t.Errorf("systemPrompt = %q, want it to contain the activated skill's body", mm.systemPrompt)
+	}
+	if fp.lastReq.Messages == nil || fp.lastReq.Messages[len(fp.lastReq.Messages)-1].Content != "#123" {
+		t.Fatalf("lastReq.Messages = %+v, want the trailing text \"#123\" sent as the last message", fp.lastReq.Messages)
+	}
+	if len(mm.lines) != 1 || mm.lines[0].role != "user" || mm.lines[0].text != "#123" {
+		t.Errorf("lines = %+v, want a single user line reading \"#123\" — no confirmation line", mm.lines)
 	}
 }
 
