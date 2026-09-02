@@ -193,6 +193,36 @@ func TestViewShowsIndicatorOnlyWhileBusy(t *testing.T) {
 	}
 }
 
+// TestViewIndicatorHasBlankLineAboveAndBelow covers issue #164: the
+// indicator must read as its own region, with exactly one blank row
+// separating it from the transcript above and the input below, not
+// butting up against either.
+func TestViewIndicatorHasBlankLineAboveAndBelow(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m = next.(Model)
+	m.busy = true
+	m.turnStart = time.Now()
+
+	lines := strings.Split(m.View().Content, "\n")
+	idx := -1
+	for i, l := range lines {
+		if strings.Contains(l, "tokens") {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("View() content has no line containing the indicator's token readout")
+	}
+	if idx == 0 || strings.TrimSpace(lines[idx-1]) != "" {
+		t.Errorf("line above the indicator = %q, want blank", lines[idx-1])
+	}
+	if idx+1 >= len(lines) || strings.TrimSpace(lines[idx+1]) != "" {
+		t.Errorf("line below the indicator = %q, want blank", lines[idx+1])
+	}
+}
+
 // TestSubmitShowsIndicatorThenHidesItOnCompletion is an end-to-end pass
 // through submit()/drain(): busy (and so the indicator) comes up the
 // instant a turn starts and goes away the instant it ends, matching busy's

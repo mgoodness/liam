@@ -38,9 +38,13 @@ import (
 
 // indicatorHeight is the indicator's fixed on-screen row count, folded
 // into syncViewportDims'/View()'s layout math the same way popupDialogHeight
-// is: a single row, always present in full the instant it's shown (no
-// per-frame resizing).
-const indicatorHeight = 1
+// is: a blank row, the content row, then another blank row (issue #164),
+// so the indicator reads as its own region separated from the transcript
+// above and the input below rather than butting up against both. Always
+// present in full the instant it's shown (no per-frame resizing).
+// renderIndicator emits the surrounding blank rows itself — see its doc —
+// so this is the only place their count is defined.
+const indicatorHeight = 3
 
 // defaultIndicatorTick is the animation's real-time cadence in production —
 // fast enough to read as continuously alive, slow enough not to burn CPU
@@ -127,7 +131,9 @@ func estimatedOutputTokens(chars int) int {
 	return chars / charsPerTokenEstimate
 }
 
-// renderIndicator renders the current animation frame: elapsed time is
+// renderIndicator renders the current animation frame, padded with a
+// blank line above and below (issue #164) so the block View() folds in
+// matches indicatorHeight's 3-row reservation. Elapsed time is
 // time.Since(m.turnStart), and the live token figure is the session's
 // running total across every already-completed turn plus this turn's own
 // in-progress estimate — the "baseline plus estimate" layering the spec
@@ -135,7 +141,7 @@ func estimatedOutputTokens(chars int) int {
 func (m Model) renderIndicator() string {
 	elapsed := time.Since(m.turnStart)
 	tokens := m.sess.TotalOutputTokens + estimatedOutputTokens(m.turnOutputChars)
-	return renderTurnIndicator(m.pal, m.animFrame, elapsed, m.activeTool, tokens)
+	return "\n" + renderTurnIndicator(m.pal, m.animFrame, elapsed, m.activeTool, tokens) + "\n"
 }
 
 // renderTurnIndicator renders one frame of the indicator: the scrambling,
