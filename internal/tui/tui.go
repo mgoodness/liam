@@ -815,17 +815,17 @@ func (m *Model) finishTurn(messages []provider.Message, err error) {
 }
 
 // completionLine builds the one-line "turn finished" transcript entry
-// (issue #166): elapsed time since turnStart — the same source and
+// (issue #166): the wall-clock time the turn actually finished, followed by
+// elapsed time since turnStart — the same source and
 // statusline.FormatDuration formatting the turn-in-progress indicator
 // itself displayed, so the figure matches what was on screen the instant
-// before the indicator disappeared — followed by the wall-clock time the
-// turn actually finished. Deliberately minimal (no token count, no active
-// tool) unlike the indicator it replaces.
+// before the indicator disappeared. Deliberately minimal (no token count,
+// no active tool) unlike the indicator it replaces.
 func completionLine(turnStart time.Time) line {
 	elapsed := statusline.FormatDuration(time.Since(turnStart))
 	return line{
 		role: "complete",
-		text: fmt.Sprintf("✓ Completed after %s @ %s", elapsed, time.Now().Format("15:04")),
+		text: fmt.Sprintf("✓ Completed @ %s after %s", time.Now().Format("15:04"), elapsed),
 	}
 }
 
