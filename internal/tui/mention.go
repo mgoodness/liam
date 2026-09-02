@@ -81,15 +81,18 @@ func clampColumn(line []rune, col int) int {
 	return col
 }
 
-// findMentionStart scans line backward from col (exclusive) for an unbroken
-// "@" token: an '@' preceded by whitespace or the start of the line, with no
-// whitespace between it and col. Returns ok=false when col isn't inside such
-// a token.
-func findMentionStart(line []rune, col int) (int, bool) {
+// findTokenStart scans line backward from col (exclusive) for an unbroken
+// "<trigger>query" token with no whitespace between trigger and col, the
+// backward-scan shape both the "@" and "/" popups' update steps share.
+// spacePreceded reports whether a trigger preceded by whitespace (not just
+// the start of the line) counts as a token start: true for "@" (issue #58),
+// false for "/", which is only ever a command candidate at column 0 (issue
+// #137). Returns ok=false when col isn't inside such a token.
+func findTokenStart(line []rune, col int, trigger rune, spacePreceded bool) (int, bool) {
 	for i := col - 1; i >= 0; i-- {
 		switch {
-		case line[i] == '@':
-			if i == 0 || unicode.IsSpace(line[i-1]) {
+		case line[i] == trigger:
+			if i == 0 || spacePreceded && unicode.IsSpace(line[i-1]) {
 				return i, true
 			}
 			return 0, false
@@ -98,6 +101,26 @@ func findMentionStart(line []rune, col int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// findMentionStart is findTokenStart with the "@" token's boundary rule: a
+// trigger preceded by whitespace or the start of the line.
+func findMentionStart(line []rune, col int) (int, bool) {
+	return findTokenStart(line, col, '@', true)
+}
+
+// popupSelectedIndex recomputes a popup's selected index for an incoming
+// recompute: it carries prevSelected across only when the popup was already
+// active (same token still under the cursor, guaranteed by the caller) and
+// the previous index is still in range of the new match list — so typing
+// more of a query doesn't reset the user's highlight unless it's no longer
+// on the list. Returns 0 (the top of the list) when there's nothing to
+// carry over.
+func popupSelectedIndex(active bool, prevSelected, newLen int) int {
+	if active && prevSelected < newLen {
+		return prevSelected
+	}
+	return 0
 }
 
 // updateMention recomputes m.mention from the textarea's current cursor
@@ -138,10 +161,10 @@ func (m *Model) updateMention() {
 		matches = matches[:maxMentionMatches]
 	}
 
-	selected := 0
-	if m.mention.active && m.mention.line == row && m.mention.start == start && m.mention.selected < len(matches) {
-		selected = m.mention.selected
-	}
+	// Carry the highlight over only when the popup stays active on the
+	// same "@" token (guarded by mention.line/start above) — see
+	// popupSelectedIndex.
+	selected := popupSelectedIndex(m.mention.active && m.mention.line == row && m.mention.start == start, m.mention.selected, len(matches))
 
 	m.mention = mentionState{
 		active:   true,
