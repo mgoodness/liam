@@ -113,7 +113,7 @@ func TestSyncViewportDimsReservesPopupDialogHeightWhenActive(t *testing.T) {
 	m = next.(Model)
 	before := m.viewport.Height()
 
-	m.mention = mentionState{active: true, matches: []string{"a.go"}}
+	m.mention = mentionState{active: true, matches: []mentionMatch{{path: "a.go"}}}
 	m.syncViewportDims()
 	if got, want := m.viewport.Height(), before-popupDialogHeight; got != want {
 		t.Errorf("mention active: viewport.Height() = %d, want %d (popupDialogHeight reserved)", got, want)
@@ -141,7 +141,7 @@ func TestViewPlacesPopupAboveInput(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{}, nil)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	m = next.(Model)
-	m.mention = mentionState{active: true, matches: []string{"MENTIONMARKER.go"}}
+	m.mention = mentionState{active: true, matches: []mentionMatch{{path: "MENTIONMARKER.go"}}}
 
 	content := m.View().Content
 	popupIdx := strings.Index(content, "MENTIONMARKER.go")
@@ -164,7 +164,7 @@ func TestViewCursorRowIncludesPopupDialogHeightWhenActive(t *testing.T) {
 	m = next.(Model)
 	m.input.Focus()
 	m.input.SetVirtualCursor(false)
-	m.mention = mentionState{active: true, matches: []string{"a.go"}}
+	m.mention = mentionState{active: true, matches: []mentionMatch{{path: "a.go"}}}
 	m.syncViewportDims()
 
 	cur := m.input.Cursor()

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,63 +104,27 @@ func TestFindMentionStartClosesOnWhitespace(t *testing.T) {
 	}
 }
 
-func TestRenderFileReferenceWholeFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "greeting.txt")
-	if err := os.WriteFile(path, []byte("hello\nworld"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := renderFileReference(path, fileReference{})
-	if err != nil {
-		t.Fatalf("renderFileReference: %v", err)
-	}
-	want := "[file: " + path + "]\nhello\nworld\n[/file: " + path + "]"
-	if got != want {
-		t.Errorf("renderFileReference = %q, want %q", got, want)
-	}
-}
-
-func TestRenderFileReferenceLineRangeAddsLineNumberContext(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "code.go")
-	content := "line1\nline2\nline3\nline4\nline5"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := renderFileReference(path, fileReference{start: 2, end: 4, hasRange: true})
-	if err != nil {
-		t.Fatalf("renderFileReference: %v", err)
-	}
-	if !strings.Contains(got, "Line 2: line2") || !strings.Contains(got, "Line 4: line4") {
-		t.Errorf("renderFileReference = %q, want line-numbered rows for lines 2-4", got)
-	}
-	if strings.Contains(got, "line1") || strings.Contains(got, "line5") {
-		t.Errorf("renderFileReference = %q, want only lines 2-4 inlined", got)
-	}
-}
-
-func TestRenderFileReferenceOutOfBoundsRangeErrors(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "short.txt")
-	if err := os.WriteFile(path, []byte("only one line"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := renderFileReference(path, fileReference{start: 10, end: 20, hasRange: true}); err == nil {
-		t.Error("renderFileReference with an out-of-bounds range returned nil error")
-	}
-}
-
-// fakeFindSearcher is a tool.FindSearcher stub returning a fixed candidate
-// list regardless of query, enough to drive the "@" popup end to end
-// without touching the real filesystem searchers.
+// fakeFindSearcher is a tool.FindSearcher stub enough to drive the "@"
+// popup end to end without touching the real filesystem searchers. When
+// byQuery is set, Find looks the query up there (letting a test simulate a
+// backend whose per-query results differ, e.g. a truncated unfiltered
+// listing versus a substring-filtered one); otherwise it always returns
+// paths regardless of query. queries, when non-nil, records every query
+// Find was called with, in call order.
 type fakeFindSearcher struct {
-	paths []string
+	paths   []string
+	byQuery map[string][]string
+	queries *[]string
 }
 
-func (f fakeFindSearcher) Find(_ context.Context, _ string) ([]string, int, error) {
+func (f fakeFindSearcher) Find(_ context.Context, query string) ([]string, int, error) {
+	if f.queries != nil {
+		*f.queries = append(*f.queries, query)
+	}
+	if f.byQuery != nil {
+		p := f.byQuery[query]
+		return p, len(p), nil
+	}
 	return f.paths, len(f.paths), nil
 }
 
@@ -189,7 +154,7 @@ func TestMentionClosesWhenTokenBreaksOnWhitespace(t *testing.T) {
 	}
 }
 
-func TestSelectingMentionInlinesFileContent(t *testing.T) {
+func TestSelectingMentionInsertsPlainReferenceNoContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "note.txt")
 	if err := os.WriteFile(path, []byte("hello world"), 0o644); err != nil {
@@ -205,35 +170,131 @@ func TestSelectingMentionInlinesFileContent(t *testing.T) {
 	if mm.mention.active {
 		t.Error("mention.active = true after selecting, want false")
 	}
-	want := "[file: " + path + "]\nhello world\n[/file: " + path + "]"
+	want := "@" + path
 	if mm.input.Value() != want {
-		t.Errorf("input.Value() = %q, want %q", mm.input.Value(), want)
+		t.Errorf("input.Value() = %q, want %q (a bare reference, no inlined content)", mm.input.Value(), want)
+	}
+	if strings.Contains(mm.input.Value(), "hello world") {
+		t.Error("input.Value() contains the file's content, want a plain reference only")
 	}
 }
 
-func TestSelectingMentionWithLineRangeInlinesOnlyThoseLines(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "lines.txt")
-	content := "one\ntwo\nthree\nfour"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+func TestSelectingMentionWithRangeSuffixInsertsReferenceWithRange(t *testing.T) {
+	// The file is never opened, so its content doesn't need to exist on
+	// disk at all — issue #155's point is that selecting a mention no
+	// longer reads the file.
+	cases := []struct {
+		name   string
+		suffix string
+	}{
+		{"single line", ":42"},
+		{"line range", ":2-3"},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "does-not-exist.txt")
 
-	m := New(agent.Loop{}, config.Config{}, nil).WithFindSearcher(fakeFindSearcher{paths: []string{path}})
+			m := New(agent.Loop{}, config.Config{}, nil).WithFindSearcher(fakeFindSearcher{paths: []string{path}})
+			next, _ := m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
+			for _, r := range path + tc.suffix {
+				next, _ = next.(Model).Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+			}
+
+			next, _ = next.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			mm := next.(Model)
+
+			want := "@" + path + tc.suffix
+			if mm.input.Value() != want {
+				t.Errorf("input.Value() = %q, want %q", mm.input.Value(), want)
+			}
+		})
+	}
+}
+
+func TestMentionPopupAlwaysAsksSearcherForUnfilteredWorkspaceListing(t *testing.T) {
+	// The fuzzy-ranking layer lives client-side in the popup, so the
+	// backend must always be asked for the full listing (empty query) —
+	// pre-filtering server-side by substring alone would hide fuzzy-only
+	// matches (issue #155).
+	var queries []string
+	m := New(agent.Loop{}, config.Config{}, nil).WithFindSearcher(fakeFindSearcher{
+		paths:   []string{"internal/tool/search_stdlib.go"},
+		queries: &queries,
+	})
+
 	next, _ := m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
-	for _, r := range path + ":2-3" {
+	for _, r := range "srchstdlib" {
 		next, _ = next.(Model).Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 
-	next, _ = next.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	found := false
+	for _, q := range queries {
+		if q == "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("findSearcher.Find queries = %v, want an unfiltered (\"\") request among them", queries)
+	}
+	mm := next.(Model)
+	if len(mm.mention.matches) != 1 || mm.mention.matches[0].path != "internal/tool/search_stdlib.go" {
+		t.Errorf("mention.matches = %v, want the fuzzy match for a non-contiguous query", mm.mention.matches)
+	}
+}
+
+func TestMentionPopupMergesSubstringMatchBeyondUnfilteredListing(t *testing.T) {
+	// Simulates a workspace bigger than the backend's own result cap: the
+	// unfiltered ("") listing only covers whichever files a tree walk
+	// visits first, but a substring query for "target.go" still finds an
+	// exact match past that boundary (tool.FindSearcher's own substring
+	// filter runs before its cap, per StdlibSearch.Find) — the popup must
+	// not lose that match just because it also always asks for the
+	// unfiltered listing (issue #155 code review).
+	m := New(agent.Loop{}, config.Config{}, nil).WithFindSearcher(fakeFindSearcher{
+		byQuery: map[string][]string{
+			"":          {"aaa.go", "bbb.go"},
+			"target.go": {"deep/dir/target.go"},
+		},
+	})
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: '@', Text: "@"})
+	for _, r := range "target.go" {
+		next, _ = next.(Model).Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
 	mm := next.(Model)
 
-	val := mm.input.Value()
-	if !strings.Contains(val, "Line 2: two") || !strings.Contains(val, "Line 3: three") {
-		t.Fatalf("input.Value() = %q, want lines 2-3 inlined with line numbers", val)
+	found := false
+	for _, mtch := range mm.mention.matches {
+		if mtch.path == "deep/dir/target.go" {
+			found = true
+		}
 	}
-	if strings.Contains(val, "one") || strings.Contains(val, "four") {
-		t.Errorf("input.Value() = %q, want only lines 2-3", val)
+	if !found {
+		t.Errorf("mention.matches = %v, want deep/dir/target.go included via the substring-filtered request", mm.mention.matches)
+	}
+}
+
+func TestMatchMentionQueryRanksFuzzyMatchesAheadOfLessRelevant(t *testing.T) {
+	// "srchstdlib" isn't a contiguous substring of either candidate, so a
+	// substring-only matcher would find nothing; sahilm/fuzzy should still
+	// surface the more relevant candidate first.
+	paths := []string{"internal/other/unrelated.go", "internal/tool/search_stdlib.go"}
+
+	got := matchMentionQuery(paths, "srchstdlib")
+	if len(got) == 0 || got[0].path != "internal/tool/search_stdlib.go" {
+		t.Errorf("matchMentionQuery(%q) = %v, want the more relevant match ranked first", "srchstdlib", got)
+	}
+}
+
+func TestMatchMentionQueryCapsAtMaxMentionMatches(t *testing.T) {
+	var paths []string
+	for i := 0; i < maxMentionMatches+5; i++ {
+		paths = append(paths, fmt.Sprintf("file%d.go", i))
+	}
+
+	got := matchMentionQuery(paths, "file")
+	if len(got) != maxMentionMatches {
+		t.Errorf("matchMentionQuery returned %d matches, want capped at %d", len(got), maxMentionMatches)
 	}
 }
 
