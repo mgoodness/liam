@@ -35,6 +35,13 @@ type Session struct {
 	// LastModel is the ModelUsed from the most recent turn's DoneEvent,
 	// resolved against a ContextLookup by ContextPercent.
 	LastModel string
+	// TotalOutputTokens is a running sum of Usage.OutputTokens across every
+	// completed turn, the same "sum across the whole session" shape as
+	// CostUSD above (unlike LastContextTokens/LastModel, which only ever
+	// reflect the most recent turn). Issue #144's in-progress turn
+	// indicator is what first needed this as an authoritative baseline to
+	// layer a live streaming estimate on top of.
+	TotalOutputTokens int
 }
 
 // New starts a fresh Session with a freshly assigned ID.
@@ -50,6 +57,7 @@ func (s *Session) Clear() {
 	s.CostUSD = 0
 	s.LastContextTokens = 0
 	s.LastModel = ""
+	s.TotalOutputTokens = 0
 }
 
 // Record folds one turn's Usage into the running cost/context tallies, and
@@ -58,6 +66,7 @@ func (s *Session) Record(model string, u provider.Usage) {
 	s.CostUSD += u.CostUSD
 	s.LastContextTokens = u.InputTokens + u.CachedInputTokens
 	s.LastModel = model
+	s.TotalOutputTokens += u.OutputTokens
 }
 
 // Cost returns the running-sum cost across the session, for the future

@@ -87,6 +87,7 @@ func TestSubmitStreamsResponseAndAppendsAssistantLine(t *testing.T) {
 		},
 	}}
 	m := New(agent.Loop{Provider: fp}, config.Config{}, nil)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("hi there")
 
 	next, cmd := m.submit()
@@ -140,6 +141,7 @@ func (f *capturingProvider) Stream(_ context.Context, req provider.Request) iter
 func TestSubmitThreadsSystemPromptFromWithSystemPrompt(t *testing.T) {
 	fp := &capturingProvider{}
 	m := New(agent.Loop{Provider: fp}, config.Config{}, nil).WithSystemPrompt("project instructions")
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("hi")
 
 	next, cmd := m.submit()
@@ -165,6 +167,7 @@ func TestSubmitDispatchesToolCallAndRendersResultLine(t *testing.T) {
 		},
 	}}
 	m := New(agent.Loop{Provider: fp, Tools: tool.NewRegistry(ft)}, config.Config{}, nil)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("read foo")
 
 	next, cmd := m.submit()

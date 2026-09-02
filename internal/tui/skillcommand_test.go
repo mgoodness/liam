@@ -52,6 +52,7 @@ func TestSubmitBareSlashNameWithTrailingTextStartsATurn(t *testing.T) {
 		{Name: "implement", Description: "Implement a feature.", Body: "IMPLEMENT SKILL BODY"},
 	}
 	m := New(agent.Loop{Provider: fp}, config.Config{}, skills)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("/implement #123")
 
 	next, cmd := m.submit()
@@ -79,6 +80,7 @@ func TestSubmitBareSlashNameWithTrailingTextStartsATurn(t *testing.T) {
 func TestSubmitBareSlashNameWithNoMatchingSkillFallsThroughToChat(t *testing.T) {
 	fp := &capturingProvider{}
 	m := New(agent.Loop{Provider: fp}, config.Config{}, nil)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("/nonexistent")
 
 	next, cmd := m.submit()

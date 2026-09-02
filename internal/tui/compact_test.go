@@ -18,6 +18,7 @@ func TestSubmitSlashCompactCondensesHistoryAndReportsSuccess(t *testing.T) {
 		{provider.TextDeltaEvent{Text: "the summary"}, provider.DoneEvent{}},
 	}}
 	m := New(agent.Loop{Provider: fp, KeepRecentTurns: 1}, config.Config{}, nil)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	var history []provider.Message
 	for i := 0; i < 5; i++ {
 		history = append(history,
@@ -54,6 +55,7 @@ func TestSubmitSlashCompactCondensesHistoryAndReportsSuccess(t *testing.T) {
 // /compact says so rather than silently doing nothing.
 func TestSubmitSlashCompactWithShortHistoryReportsNothingToCompact(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{}, nil)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.sess.Messages = []provider.Message{{Role: "user", Content: "hi"}}
 	m.input.SetValue("/compact")
 
@@ -75,6 +77,7 @@ func TestSubmitSlashCompactWithShortHistoryReportsNothingToCompact(t *testing.T)
 // would otherwise produce.
 func TestSubmitSlashCompactCanceledReportsInterrupted(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{}, nil)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.sess.Messages = []provider.Message{{Role: "user", Content: "hi"}}
 	m.input.SetValue("/compact")
 

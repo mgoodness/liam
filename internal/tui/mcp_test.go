@@ -47,6 +47,7 @@ func TestSubmitMergesMCPToolsBeforeFirstTurnDispatch(t *testing.T) {
 		},
 	}}
 	m := New(agent.Loop{Provider: fp, Tools: tool.NewRegistry()}, config.Config{}, nil).WithMCPLoader(loader)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("use the mcp tool")
 
 	next, cmd := m.submit()
@@ -73,6 +74,7 @@ func TestSubmitWaitsForMCPOnFirstTurnOnlyNotSubsequent(t *testing.T) {
 		{provider.DoneEvent{FinishReason: "stop"}},
 	}}
 	m := New(agent.Loop{Provider: fp, Tools: tool.NewRegistry()}, config.Config{}, nil).WithMCPLoader(loader)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 
 	m.input.SetValue("first")
 	next, cmd := m.submit()
@@ -95,6 +97,7 @@ func TestSubmitRendersSystemLineOnMCPLoadTimeout(t *testing.T) {
 	loader := &fakeMCPLoader{timedOut: true}
 	fp := &multiCallProvider{turns: [][]provider.Event{{provider.DoneEvent{FinishReason: "stop"}}}}
 	m := New(agent.Loop{Provider: fp, Tools: tool.NewRegistry()}, config.Config{}, nil).WithMCPLoader(loader)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("hi")
 
 	next, cmd := m.submit()
@@ -117,6 +120,7 @@ func TestSubmitRendersSystemLineOnMCPServerError(t *testing.T) {
 	loader := &fakeMCPLoader{errs: map[string]error{"bad-server": errors.New("connect refused")}}
 	fp := &multiCallProvider{turns: [][]provider.Event{{provider.DoneEvent{FinishReason: "stop"}}}}
 	m := New(agent.Loop{Provider: fp, Tools: tool.NewRegistry()}, config.Config{}, nil).WithMCPLoader(loader)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	m.input.SetValue("hi")
 
 	next, cmd := m.submit()

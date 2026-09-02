@@ -111,6 +111,17 @@ type Model struct {
 	cancel context.CancelFunc
 	events chan tea.Msg // non-nil while a turn is in flight
 
+	// turnStart/activeTool/turnOutputChars/animFrame back the animated
+	// turn-in-progress indicator (issue #144), rendered directly above the
+	// input for as long as busy is true — see indicator.go. turnStart is a
+	// per-turn clock (reset at the start of every submit()/compact() call),
+	// distinct from statusTracker's session-cumulative one.
+	turnStart       time.Time
+	activeTool      string // the in-flight ToolCallEvent's Name; "" between calls
+	turnOutputChars int    // TextDeltaEvent text accumulated since the last DoneEvent, backing the live token estimate
+	animFrame       int    // bumped by indicatorTickMsg; drives the indicator's glyph/gradient animation
+	indicatorTick   time.Duration
+
 	mcpLoader    mcp.ToolLoader // set via WithMCPLoader; nil means no mcpServers configured
 	mcpAttempted bool           // guards waiting on mcpLoader to exactly the session's first turn
 
@@ -206,6 +217,8 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 		statusTracker:  statusline.NewTracker(),
 		statusGen:      1, // Init() schedules gen 1's debounce tick directly, without mutating a throwaway Model copy
 		statusDebounce: defaultStatusDebounce,
+
+		indicatorTick: defaultIndicatorTick,
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
@@ -328,6 +341,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compactDoneMsg:
 		m.busy = false
 		m.cancel = nil
+		m.stopIndicator()
 		switch {
 		case msg.canceled:
 			m.lines = append(m.lines, line{role: "system", text: "[interrupted]"})
@@ -364,6 +378,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusTimerMsg:
 		return m, tea.Batch(m.requestStatusRefresh(), m.scheduleStatusTimer())
+
+	case indicatorTickMsg:
+		if !m.busy {
+			return m, nil // the turn this chain was ticking for already ended — stop rescheduling
+		}
+		m.animFrame++
+		return m, m.indicatorTickCmd()
 	}
 
 	var cmd tea.Cmd
@@ -510,11 +531,15 @@ func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*
 // bottom footer, below the input). While a popup (m.mention/m.slash) is
 // active, popupDialogHeight is reserved too — carved out of the viewport's
 // budget only for as long as the dialog is actually on screen (issue #139),
-// not permanently.
+// not permanently. Likewise, indicatorHeight is reserved only while m.busy
+// (issue #144's animated turn-in-progress indicator).
 func (m *Model) syncViewportDims() {
 	reserved := m.input.Height() + 1 + len(m.statusLines)
 	if m.popupActive() {
 		reserved += popupDialogHeight
+	}
+	if m.busy {
+		reserved += indicatorHeight
 	}
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(max(0, m.height-reserved))
@@ -669,6 +694,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.busy = true
 	m.cancel = cancel
 	m.events = events
+	m.startIndicator()
 
 	// mcpLoader is waited on (bounded by mcp.DefaultLoadTimeout) inside
 	// runTurn's own background goroutine, never here — submit() runs on
@@ -683,7 +709,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	loader := m.mcpLoader
 	go runTurn(ctx, loop, req, events, loader, waitForMCP)
 
-	return m, waitForMsg(events)
+	return m, tea.Batch(waitForMsg(events), m.indicatorTickCmd())
 }
 
 // runTurn drives one agent.Loop turn in the background, forwarding every
@@ -727,15 +753,24 @@ func (m *Model) handleEvent(ev provider.Event) bool {
 	switch e := ev.(type) {
 	case provider.TextDeltaEvent:
 		m.streaming.WriteString(e.Text)
+		m.turnOutputChars += countChars(e.Text)
 	case provider.ToolCallEvent:
 		m.flushStreaming()
+		m.activeTool = e.Name
 	case provider.ToolResultEvent:
 		m.flushStreaming()
+		m.activeTool = ""
 		m.lines = append(m.lines, line{role: "tool", text: render.ToolCall(e.Name, e.ArgsJSON, e.Content, e.IsError)})
 		m.statusTracker.RecordToolCall()
 		return true
 	case provider.DoneEvent:
 		m.sess.Record(e.ModelUsed, e.Usage)
+		// e.Usage.OutputTokens just landed in sess.TotalOutputTokens, the
+		// authoritative figure for everything streamed so far this turn —
+		// zero the estimate rather than let it double-count on top of the
+		// real number once a possible next tool-call round trip starts
+		// streaming more text.
+		m.turnOutputChars = 0
 		return true
 	}
 	return false
@@ -760,6 +795,7 @@ func (m *Model) finishTurn(messages []provider.Message, err error) {
 	m.busy = false
 	m.cancel = nil
 	m.events = nil
+	m.stopIndicator()
 	m.sess.Messages = messages
 
 	switch {
@@ -799,15 +835,20 @@ func (m Model) View() tea.View {
 	}
 
 	m.syncViewportDims()
-	// [transcript] -> [popup, only while active] -> [input] -> [status
-	// block] (issue #139's resolved layout). inputRow tracks the input's
-	// on-screen row as the popup is folded in, so the cursor offset below
-	// only has one thing to stay in sync with.
+	// [transcript] -> [popup, only while active] -> [indicator, only while
+	// busy] -> [input] -> [status block] (issue #139's resolved layout,
+	// extended by issue #144's turn-in-progress indicator). inputRow tracks
+	// the input's on-screen row as the popup/indicator are folded in, so
+	// the cursor offset below only has one thing to stay in sync with.
 	content := m.viewport.View() + "\n"
 	inputRow := m.viewport.Height() + 1
 	if popup := m.activePopupContent(); popup != "" {
 		content += renderPopupDialog(m.pal, m.width, popup) + "\n"
 		inputRow += popupDialogHeight
+	}
+	if m.busy {
+		content += m.renderIndicator() + "\n"
+		inputRow += indicatorHeight
 	}
 	content += m.input.View()
 	if statusBlock := m.renderStatusBlock(); statusBlock != "" {

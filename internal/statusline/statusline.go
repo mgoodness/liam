@@ -316,12 +316,20 @@ func metricsBar(in Input, pal theme.Palette) string {
 	if in.ToolCalls == 1 {
 		toolWord = "tool"
 	}
+	elapsed := time.Duration(in.DurationMs) * time.Millisecond
 	return bar + dim.Render(fmt.Sprintf(" %s  •  %d %s run  •  ⏱ %s  •  $%.4f",
-		ctxLabel, in.ToolCalls, toolWord, formatDuration(in.DurationMs), in.CostUSD))
+		ctxLabel, in.ToolCalls, toolWord, FormatDuration(elapsed), in.CostUSD))
 }
 
-func formatDuration(ms int64) string {
-	d := (time.Duration(ms) * time.Millisecond).Round(time.Second)
+// FormatDuration renders d to the nearest second as "Ns" or "Mm0Ss" —
+// coarser than a hundredths-precision stopwatch, matching the granularity
+// a status readout actually needs. Shared by the status block's own
+// session-cumulative elapsed time and the TUI's per-turn indicator (issue
+// #144, tui.formatElapsed's original home before it moved here), so the
+// two elapsed-time readouts in the TUI read consistently rather than each
+// hand-rolling the same rounding.
+func FormatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
 	m := d / time.Minute
 	d -= m * time.Minute
 	s := d / time.Second

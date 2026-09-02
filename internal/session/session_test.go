@@ -17,8 +17,8 @@ func TestNewAssignsAnID(t *testing.T) {
 
 func TestRecordAccumulatesCostAndTracksLastContext(t *testing.T) {
 	s := New()
-	s.Record("openrouter/auto", provider.Usage{InputTokens: 100, CachedInputTokens: 20, CostUSD: 0.01})
-	s.Record("anthropic/claude-3.7-sonnet", provider.Usage{InputTokens: 200, CachedInputTokens: 0, CostUSD: 0.02})
+	s.Record("openrouter/auto", provider.Usage{InputTokens: 100, CachedInputTokens: 20, OutputTokens: 30, CostUSD: 0.01})
+	s.Record("anthropic/claude-3.7-sonnet", provider.Usage{InputTokens: 200, CachedInputTokens: 0, OutputTokens: 50, CostUSD: 0.02})
 
 	if got, want := s.CostUSD, 0.03; got != want {
 		t.Errorf("CostUSD = %v, want %v", got, want)
@@ -32,13 +32,16 @@ func TestRecordAccumulatesCostAndTracksLastContext(t *testing.T) {
 	if got, want := s.LastModel, "anthropic/claude-3.7-sonnet"; got != want {
 		t.Errorf("LastModel = %q, want %q (most recent turn only)", got, want)
 	}
+	if got, want := s.TotalOutputTokens, 80; got != want {
+		t.Errorf("TotalOutputTokens = %d, want %d (summed across every turn)", got, want)
+	}
 }
 
 func TestClearResetsStateAndAssignsAFreshID(t *testing.T) {
 	s := New()
 	oldID := s.ID
 	s.Messages = []provider.Message{{Role: "user", Content: "hi"}}
-	s.Record("openrouter/auto", provider.Usage{InputTokens: 100, CostUSD: 1.23})
+	s.Record("openrouter/auto", provider.Usage{InputTokens: 100, OutputTokens: 40, CostUSD: 1.23})
 
 	s.Clear()
 
@@ -56,6 +59,9 @@ func TestClearResetsStateAndAssignsAFreshID(t *testing.T) {
 	}
 	if s.LastModel != "" {
 		t.Errorf("LastModel = %q, want %q after Clear()", s.LastModel, "")
+	}
+	if s.TotalOutputTokens != 0 {
+		t.Errorf("TotalOutputTokens = %d, want 0 after Clear()", s.TotalOutputTokens)
 	}
 }
 
