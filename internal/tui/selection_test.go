@@ -77,8 +77,9 @@ func TestClickWithoutDragCopiesNothingAndLeavesNoHighlight(t *testing.T) {
 func TestDragSelectsAndCopiesSpannedText(t *testing.T) {
 	m := sized(t, New(agent.Loop{}, config.Config{}, nil), 30)
 	// sized's 30 "line N" rows plus the trailing blank separator row (31
-	// content lines total) against an 8-row viewport put the visible rows
-	// at content lines 23..30 (YOffset 23): screen row 0 is "line 23".
+	// content lines total) against a 6-row viewport (the input box's
+	// top/bottom border rows shrink it from 8) put the visible rows at
+	// content lines 25..30 (YOffset 25): screen row 0 is "line 25".
 	m = click(t, m, 0, 0)
 	m = drag(t, m, m.width-1, 2)
 
@@ -88,7 +89,7 @@ func TestDragSelectsAndCopiesSpannedText(t *testing.T) {
 
 	final, cmd := release(t, m, m.width-1, 2)
 	got := clipboardText(t, cmd)
-	want := "line 23\nline 24\nline 25"
+	want := "line 25\nline 26\nline 27"
 	if got != want {
 		t.Errorf("copied text = %q, want %q", got, want)
 	}
@@ -107,7 +108,7 @@ func TestDragUpwardNormalizesSelection(t *testing.T) {
 
 	_, cmd := release(t, m, 0, 0)
 	got := clipboardText(t, cmd)
-	want := "line 23\nline 24\nline 25"
+	want := "line 25\nline 26\nline 27"
 	if got != want {
 		t.Errorf("copied text = %q, want %q", got, want)
 	}

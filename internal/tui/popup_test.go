@@ -173,7 +173,7 @@ func TestViewCursorRowIncludesPopupDialogHeightWhenActive(t *testing.T) {
 	}
 
 	v := m.View()
-	want := cur.Y + m.viewport.Height() + 1 + popupDialogHeight
+	want := cur.Y + m.viewport.Height() + 1 + popupDialogHeight + inputBorderTopHeight
 	if v.Cursor == nil || v.Cursor.Y != want {
 		t.Errorf("View().Cursor.Y = %v, want %d (popupDialogHeight added while a popup is active)", v.Cursor, want)
 	}

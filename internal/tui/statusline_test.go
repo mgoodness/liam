@@ -218,7 +218,7 @@ func TestViewCursorRowExcludesStatusBlockRows(t *testing.T) {
 	}
 
 	v := m.View()
-	want := cur.Y + m.viewport.Height() + 1
+	want := cur.Y + m.viewport.Height() + 1 + inputBorderTopHeight
 	if v.Cursor == nil || v.Cursor.Y != want {
 		t.Errorf("View().Cursor.Y = %v, want %d (status block rows must not be added since the block is below the cursor)", v.Cursor, want)
 	}
