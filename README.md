@@ -10,6 +10,8 @@ MCP, and Agent Skills through a small number of well-chosen seams.
 - **Interactive TUI or headless** — a Bubbletea shell with auto-detected
   light/dark (Catppuccin Latte/Frappe) theming, or `liam -p "<prompt>"` for
   scripting/CI.
+- **Click-drag transcript selection** — click and drag over the transcript
+  to highlight text, copied to the system clipboard via OSC-52 on release.
 - **OpenRouter, auto-routing by default** — `openrouter/auto` picks the
   model per turn; any other OpenRouter model string works too.
 - **Built-in toolset**: `read`, `write`, `edit`, `bash`, `find`, `grep`,
@@ -64,6 +66,8 @@ Flags:
 | `-version` | Print the version and exit.                                                      |
 
 Interactive-mode slash commands: `/quit`, `/clear` (reset the session), `/compact` (condense the conversation history on demand), `/skills` (list discovered skills), `/<skill-name>` (force-activate a skill by name, bypassing model judgment). Typing `/` at the very start of the input opens a fuzzy-matched popup suggesting these (Up/Down to navigate, Tab to autocomplete — Enter still submits immediately, even with the popup open).
+
+Click and drag over the transcript to select text (highlighted in reverse video); releasing the mouse copies the selected plain text to your system clipboard via OSC-52, no confirmation step. Scroll-wheel scrolling keeps working the same as always. OSC-52 isn't supported everywhere — notably, [herdrdev/herdr#2399](https://github.com/herdrdev/herdr/issues/2399) is an open bug where herdr silently drops it over SSH/WSL. If copying doesn't reach your clipboard, fall back to your terminal's own modifier-click selection bypass (Shift-click on most Linux terminals/Windows Terminal, Option-click on iTerm2/Terminal.app).
 
 ## Configuration
 
