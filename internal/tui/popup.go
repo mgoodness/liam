@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/lipgloss/v2"
+	"github.com/sahilm/fuzzy"
 
 	"github.com/mgoodness/liam/internal/theme"
 )
@@ -41,6 +42,18 @@ func findTokenStart(line []rune, col int, trigger rune, spacePreceded bool) (int
 		}
 	}
 	return 0, false
+}
+
+// fuzzyRank runs sahilm/fuzzy's Find(query, names) and caps the result at
+// max — the shared shape behind both matchSlashQuery's and
+// matchMentionQuery's non-empty-query branch, factored out here since it's
+// otherwise identical in both (issue #155 code review).
+func fuzzyRank(query string, names []string, max int) []fuzzy.Match {
+	found := fuzzy.Find(query, names)
+	if len(found) > max {
+		found = found[:max]
+	}
+	return found
 }
 
 // popupSelectedIndex recomputes a popup's selected index for an incoming

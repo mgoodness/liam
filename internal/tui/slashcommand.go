@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/sahilm/fuzzy"
 
 	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/skill"
@@ -95,10 +94,7 @@ func matchSlashQuery(candidates []slashCandidate, query string) []slashMatch {
 		for i, c := range candidates {
 			names[i] = c.name
 		}
-		found := fuzzy.Find(query, names)
-		if len(found) > maxSlashMatches {
-			found = found[:maxSlashMatches]
-		}
+		found := fuzzyRank(query, names, maxSlashMatches)
 		out := make([]slashMatch, len(found))
 		for i, f := range found {
 			out[i] = slashMatch{slashCandidate: candidates[f.Index], matchedIndexes: f.MatchedIndexes}
