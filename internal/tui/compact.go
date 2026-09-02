@@ -35,11 +35,13 @@ func (m Model) compact() (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.busy = true
 	m.cancel = cancel
+	m.startIndicator()
 	loop := m.loop
 	messages := append([]provider.Message(nil), m.sess.Messages...)
 	model := m.reqModel
-	return m, func() tea.Msg {
+	run := func() tea.Msg {
 		compacted, ok := loop.Compact(ctx, messages, model)
 		return compactDoneMsg{messages: compacted, ok: ok, canceled: ctx.Err() != nil}
 	}
+	return m, tea.Batch(run, m.indicatorTickCmd())
 }

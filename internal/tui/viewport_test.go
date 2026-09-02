@@ -15,6 +15,7 @@ import (
 // scroll) and populated with n system lines, refreshed into the viewport.
 func sized(t *testing.T, m Model, n int) Model {
 	t.Helper()
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick for the handful of callers that go on to submit()+drain()
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 	m = next.(Model)
 	for i := range n {
@@ -184,6 +185,7 @@ func TestStreamedContentAutoScrollsWhileFollowing(t *testing.T) {
 		provider.DoneEvent{FinishReason: "stop"},
 	}}}
 	m := New(agent.Loop{Provider: fp}, config.Config{}, nil)
+	m.indicatorTick = 0 // avoid a real 90ms sleep per tick when drain() invokes cmd() below
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 	m = next.(Model)
 	for i := range 30 {

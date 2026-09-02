@@ -51,6 +51,23 @@ func TestTrackerRecordsAndResets(t *testing.T) {
 	}
 }
 
+func TestFormatDuration(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{9 * time.Second, "9s"},
+		{65 * time.Second, "1m05s"},
+		{125 * time.Second, "2m05s"},
+	}
+	for _, tc := range cases {
+		if got := FormatDuration(tc.d); got != tc.want {
+			t.Errorf("FormatDuration(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
 func TestBuildInputBeforeAnyTurnFallsBackToConfiguredModelAndNilContext(t *testing.T) {
 	sess := session.New()
 	in := BuildInput(context.Background(), sess, nil, NewTracker(), "/proj", "openrouter/auto")
