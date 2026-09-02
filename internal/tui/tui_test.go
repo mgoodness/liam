@@ -415,10 +415,10 @@ func TestFinishTurnMarksErrorForNonCancelFailures(t *testing.T) {
 }
 
 // completionLinePattern matches completionLine's "✓ Completed after <elapsed>
-// · <HH:MM>" shape (issue #166, 24-hour clock) regardless of the actual
+// @ <HH:MM>" shape (issue #166, 24-hour clock) regardless of the actual
 // elapsed duration or wall-clock time, both of which vary with the moment
 // the test runs.
-var completionLinePattern = regexp.MustCompile(`^✓ Completed after \S+ · \d{2}:\d{2}$`)
+var completionLinePattern = regexp.MustCompile(`^✓ Completed after \S+ @ \d{2}:\d{2}$`)
 
 func TestFinishTurnAppendsCompletionLineOnSuccess(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{}, nil)
