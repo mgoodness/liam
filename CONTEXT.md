@@ -32,6 +32,10 @@ _Avoid_: hook, plugin, prompt.
 User input beginning with `/`: either one of liam's four reserved built-ins (`/quit`, `/clear`, `/compact`, `/skills`) or a bare `/<skill-name>` that force-activates a matching Skill, bypassing model judgment. Only recognized when it's the very start of the input (row 0, column 0) — a `/` elsewhere is ordinary text.
 _Avoid_: command (bare — could be confused with a tool call or CLI flag).
 
+**Transcript**:
+The scrolling, read-only log of the session's turns — every user and assistant message, tool call, and system notice rendered so far, occupying the fixed-height region above the input. Mouse-wheel scrolling and click-drag text selection both act on the transcript specifically, not the input or status block.
+_Avoid_: scrollback, conversation view, history (bare — could be confused with input-history recall).
+
 **Popup**:
 A transient, fuzzy-matched suggestion list that opens as the user types a specific trigger character, floats as a bordered dialog above the input while active, and closes on selection, Esc, or the trigger token breaking — liam has two: the `@`-mention (file reference) popup and the `/`-command (Slash command) popup. Distinct from the status block, which is always-present rather than transient.
 _Avoid_: modal (describes its rendering, not the concept — a popup floats as a dialog, but "modal" alone doesn't capture the autocomplete/suggestion behavior), dropdown, autocomplete (bare — describes what it does, not the harness-level concept).
