@@ -213,7 +213,8 @@ func (m Model) selectSlash() Model {
 }
 
 // renderSlashPopup renders the "/"-command autocomplete match list shown
-// below the input while ss is active: the selected row gets
+// in the floating popup dialog above the input while ss is active: the
+// selected row gets
 // renderMentionPopup's whole-line highlight, every row shows the
 // candidate's description (when it has one — /quit has none, see
 // builtinCommands), and an unselected row's matched characters are bolded

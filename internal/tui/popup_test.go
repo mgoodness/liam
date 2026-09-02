@@ -1,6 +1,15 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/mgoodness/liam/internal/agent"
+	"github.com/mgoodness/liam/internal/config"
+)
 
 func TestFindTokenStartRequiresAllowedBoundaryBeforeTrigger(t *testing.T) {
 	cases := []struct {
@@ -65,5 +74,107 @@ func TestPopupSelectedIndexCarriesSelectionWhileInRange(t *testing.T) {
 					tc.active, tc.prevSelected, tc.newLen, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRenderPopupDialogFixedHeightRegardlessOfContent covers the AC that a
+// popup dialog is a constant popupDialogHeight rows tall and width columns
+// wide (issue #139) whether its match-list content is one line, several
+// lines, or the full maxMentionMatches cap — no per-keystroke resizing as
+// results narrow or widen.
+func TestRenderPopupDialogFixedHeightRegardlessOfContent(t *testing.T) {
+	p := New(agent.Loop{}, config.Config{}, nil).pal
+	width := 40
+
+	for _, n := range []int{1, 2, maxMentionMatches} {
+		lines := make([]string, n)
+		for i := range lines {
+			lines[i] = "match"
+		}
+		content := strings.Join(lines, "\n")
+
+		dialog := renderPopupDialog(p, width, content)
+		if got := lipgloss.Height(dialog); got != popupDialogHeight {
+			t.Errorf("n=%d: renderPopupDialog height = %d, want %d", n, got, popupDialogHeight)
+		}
+		if got := lipgloss.Width(dialog); got != width {
+			t.Errorf("n=%d: renderPopupDialog width = %d, want %d", n, got, width)
+		}
+	}
+}
+
+// TestSyncViewportDimsReservesPopupDialogHeightWhenActive covers the AC
+// that the popup dialog's height is carved out of the viewport's height
+// budget only while a popup is actually active — issue #139's research
+// found syncViewportDims reserved nothing for either popup before this.
+func TestSyncViewportDimsReservesPopupDialogHeightWhenActive(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m = next.(Model)
+	before := m.viewport.Height()
+
+	m.mention = mentionState{active: true, matches: []string{"a.go"}}
+	m.syncViewportDims()
+	if got, want := m.viewport.Height(), before-popupDialogHeight; got != want {
+		t.Errorf("mention active: viewport.Height() = %d, want %d (popupDialogHeight reserved)", got, want)
+	}
+
+	m.mention = mentionState{}
+	m.slash = slashState{active: true}
+	m.syncViewportDims()
+	if got, want := m.viewport.Height(), before-popupDialogHeight; got != want {
+		t.Errorf("slash active: viewport.Height() = %d, want %d (popupDialogHeight reserved)", got, want)
+	}
+
+	m.slash = slashState{}
+	m.syncViewportDims()
+	if got := m.viewport.Height(); got != before {
+		t.Errorf("neither active: viewport.Height() = %d, want %d (no popup reserved)", got, before)
+	}
+}
+
+// TestViewPlacesPopupAboveInput covers the resolved layout: [transcript] ->
+// [popup, only while active] -> [input] -> [status block]. Before issue
+// #139 the popup rendered as an appended row below the input; this is a
+// deliberate reordering.
+func TestViewPlacesPopupAboveInput(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m = next.(Model)
+	m.mention = mentionState{active: true, matches: []string{"MENTIONMARKER.go"}}
+
+	content := m.View().Content
+	popupIdx := strings.Index(content, "MENTIONMARKER.go")
+	inputIdx := strings.Index(content, m.input.View())
+	if popupIdx == -1 {
+		t.Fatal("View() content doesn't include the active mention popup")
+	}
+	if inputIdx == -1 || popupIdx >= inputIdx {
+		t.Errorf("popup (at %d) is not positioned above the input (at %d)", popupIdx, inputIdx)
+	}
+}
+
+// TestViewCursorRowIncludesPopupDialogHeightWhenActive covers the cursor-
+// offset half of the relayout: since the popup now sits between the
+// viewport and the input, the input's on-screen row (and so the cursor's)
+// shifts down by popupDialogHeight while a popup is active.
+func TestViewCursorRowIncludesPopupDialogHeightWhenActive(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m = next.(Model)
+	m.input.Focus()
+	m.input.SetVirtualCursor(false)
+	m.mention = mentionState{active: true, matches: []string{"a.go"}}
+	m.syncViewportDims()
+
+	cur := m.input.Cursor()
+	if cur == nil {
+		t.Fatal("input.Cursor() = nil, want a cursor (input is focused)")
+	}
+
+	v := m.View()
+	want := cur.Y + m.viewport.Height() + 1 + popupDialogHeight
+	if v.Cursor == nil || v.Cursor.Y != want {
+		t.Errorf("View().Cursor.Y = %v, want %d (popupDialogHeight added while a popup is active)", v.Cursor, want)
 	}
 }

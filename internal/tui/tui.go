@@ -485,10 +485,17 @@ func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*
 // separator row baked into renderTranscript's trailing newline; the
 // statusLine block (when it has any rows) reserves one row per line on
 // top of that, regardless of the block's own on-screen position (the
-// bottom footer, below the input).
+// bottom footer, below the input). While a popup (m.mention/m.slash) is
+// active, popupDialogHeight is reserved too — carved out of the viewport's
+// budget only for as long as the dialog is actually on screen (issue #139),
+// not permanently.
 func (m *Model) syncViewportDims() {
+	reserved := m.input.Height() + 1 + len(m.statusLines)
+	if m.popupActive() {
+		reserved += popupDialogHeight
+	}
 	m.viewport.SetWidth(m.width)
-	m.viewport.SetHeight(max(0, m.height-m.input.Height()-1-len(m.statusLines)))
+	m.viewport.SetHeight(max(0, m.height-reserved))
 }
 
 // refreshViewport rebuilds the viewport's content from the current
@@ -759,13 +766,17 @@ func (m Model) View() tea.View {
 	}
 
 	m.syncViewportDims()
-	content := m.viewport.View() + "\n" + m.input.View()
-	if m.mention.active {
-		content += "\n" + renderMentionPopup(m.pal, m.mention)
+	// [transcript] -> [popup, only while active] -> [input] -> [status
+	// block] (issue #139's resolved layout). inputRow tracks the input's
+	// on-screen row as the popup is folded in, so the cursor offset below
+	// only has one thing to stay in sync with.
+	content := m.viewport.View() + "\n"
+	inputRow := m.viewport.Height() + 1
+	if popup := m.activePopupContent(); popup != "" {
+		content += renderPopupDialog(m.pal, m.width, popup) + "\n"
+		inputRow += popupDialogHeight
 	}
-	if m.slash.active {
-		content += "\n" + renderSlashPopup(m.pal, m.slash)
-	}
+	content += m.input.View()
 	if statusBlock := m.renderStatusBlock(); statusBlock != "" {
 		content += "\n" + statusBlock
 	}
@@ -774,14 +785,15 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.BackgroundColor = lipgloss.Color(m.pal.Base)
 	v.MouseMode = tea.MouseModeCellMotion
-	// Offset the textarea's own cursor position by the viewport's fixed
-	// row count and the blank separator line. The statusLine block renders
-	// below the input now, so its row count no longer factors in here.
-	// This doesn't account for line-wrapped rows (no width-aware wrapping
-	// yet), so a very long unwrapped line can throw it off; harmless
-	// beyond a cosmetic cursor-position glitch.
+	// Offset the textarea's own cursor position by inputRow, the row the
+	// input actually starts on above (the viewport's fixed row count, the
+	// blank separator line, and popupDialogHeight while a popup is active).
+	// The statusLine block renders below the input, so its row count never
+	// factors in here. This doesn't account for line-wrapped rows (no
+	// width-aware wrapping yet), so a very long unwrapped line can throw it
+	// off; harmless beyond a cosmetic cursor-position glitch.
 	if cur := m.input.Cursor(); cur != nil {
-		v.Cursor = tea.NewCursor(cur.X, cur.Y+m.viewport.Height()+1)
+		v.Cursor = tea.NewCursor(cur.X, cur.Y+inputRow)
 	}
 	return v
 }
