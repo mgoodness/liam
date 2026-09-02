@@ -257,14 +257,7 @@ func renderSlashPopup(p theme.Palette, ss slashState, width int) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		name := mtch.name
-		desc := mtch.description
-		if width > 0 {
-			if l := len([]rune(name)); l > nameWidth {
-				name = render.TruncateWidth(name, nameWidth)
-			}
-			desc = render.TruncateWidth(desc, descWidth)
-		}
+		name, desc := render.FitLabelDesc(mtch.name, mtch.description, nameWidth, descWidth, width)
 		padded := fmt.Sprintf("%-*s", nameWidth, name)
 
 		if i == ss.selected {

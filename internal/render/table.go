@@ -71,3 +71,20 @@ func TableColumns(labels []string, width, overhead, minDesc int) (labelWidth, de
 	}
 	return labelWidth, descWidth
 }
+
+// FitLabelDesc truncates label (only if it overflows labelWidth) and desc
+// (unconditionally, to descWidth) for one row of a "label — description"
+// table — the exact three-line shape the "/"-command popup and /skills'
+// output both need per row, centralized here (issue #82) rather than
+// duplicated a second time now that /skills' table joined the popup's.
+// width <= 0 leaves both strings untouched, matching TableColumns'/
+// ColumnWidth's own "headless caller" convention.
+func FitLabelDesc(label, desc string, labelWidth, descWidth, width int) (string, string) {
+	if width <= 0 {
+		return label, desc
+	}
+	if l := len([]rune(label)); l > labelWidth {
+		label = TruncateWidth(label, labelWidth)
+	}
+	return label, TruncateWidth(desc, descWidth)
+}

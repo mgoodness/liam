@@ -92,3 +92,35 @@ func TestTableColumnsNarrowWidthStillFloorsDescAtMinDesc(t *testing.T) {
 		t.Errorf("descWidth = %d, want MinDescWidth (%d)", descWidth, MinDescWidth)
 	}
 }
+
+func TestFitLabelDescLeavesShortLabelUntouched(t *testing.T) {
+	label, desc := FitLabelDesc("a", "a short description", 10, 20, 80)
+	if label != "a" {
+		t.Errorf("label = %q, want %q (fits, no truncation)", label, "a")
+	}
+	if desc != "a short description" {
+		t.Errorf("desc = %q, want unchanged", desc)
+	}
+}
+
+func TestFitLabelDescTruncatesOverflowingLabel(t *testing.T) {
+	label, _ := FitLabelDesc(strings.Repeat("x", 20), "d", 10, 20, 80)
+	if got := len([]rune(label)); got != 10 {
+		t.Errorf("len(label) = %d, want 10 (truncated to labelWidth)", got)
+	}
+}
+
+func TestFitLabelDescTruncatesDescUnconditionally(t *testing.T) {
+	_, desc := FitLabelDesc("a", strings.Repeat("x", 50), 10, 20, 80)
+	if got := len([]rune(desc)); got != 20 {
+		t.Errorf("len(desc) = %d, want 20 (truncated to descWidth)", got)
+	}
+}
+
+func TestFitLabelDescNoWidthSkipsTruncation(t *testing.T) {
+	longLabel, longDesc := strings.Repeat("x", 100), strings.Repeat("y", 100)
+	label, desc := FitLabelDesc(longLabel, longDesc, 10, 20, 0)
+	if label != longLabel || desc != longDesc {
+		t.Errorf("FitLabelDesc(..., width=0) truncated, want both left untouched")
+	}
+}

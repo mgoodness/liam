@@ -3,23 +3,15 @@ package tool
 import (
 	"fmt"
 	"strings"
-)
 
-// pluralize returns singular when n == 1, plural otherwise — "match"'s
-// plural ("matches") isn't a plain "+s", so formatHeader/
-// formatTruncationNotice take both forms rather than deriving one.
-func pluralize(n int, singular, plural string) string {
-	if n == 1 {
-		return singular
-	}
-	return plural
-}
+	"github.com/mgoodness/liam/internal/render"
+)
 
 // formatHeader builds the "Found N <noun>[ (more <plural> available)]"
 // header line shared by formatGrepResults/formatFindResults; shown is how
 // many of total are actually included in the result.
 func formatHeader(singular, plural string, total, shown int) string {
-	header := fmt.Sprintf("Found %d %s", total, pluralize(total, singular, plural))
+	header := fmt.Sprintf("Found %d %s", total, render.Pluralize(total, singular, plural))
 	if shown < total {
 		header += fmt.Sprintf(" (more %s available)", plural)
 	}
@@ -30,7 +22,7 @@ func formatHeader(singular, plural string, total, shown int) string {
 // shown ...]" marker appended when hidden (total-shown) is positive,
 // matching truncate()'s own bracket-marker convention (ADR-0005).
 func formatTruncationNotice(singular, plural string, hidden int) string {
-	return fmt.Sprintf("\n\n[... truncated, %d more %s not shown ...]", hidden, pluralize(hidden, singular, plural))
+	return fmt.Sprintf("\n\n[... truncated, %d more %s not shown ...]", hidden, render.Pluralize(hidden, singular, plural))
 }
 
 // formatGrepResults renders matches into liam's shared find/grep output
