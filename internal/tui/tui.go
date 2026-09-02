@@ -825,7 +825,7 @@ func completionLine(turnStart time.Time) line {
 	elapsed := statusline.FormatDuration(time.Since(turnStart))
 	return line{
 		role: "complete",
-		text: fmt.Sprintf("✓ Completed after %s · %s", elapsed, time.Now().Format("3:04 PM")),
+		text: fmt.Sprintf("✓ Completed after %s · %s", elapsed, time.Now().Format("15:04")),
 	}
 }
 
