@@ -58,7 +58,7 @@ import (
 
 // line is one rendered row of the conversation scrollback.
 type line struct {
-	role string // "user" | "assistant" | "tool" | "system" | "info" | "raw"
+	role string // "user" | "assistant" | "tool" | "system" | "info" | "complete" | "raw"
 	text string
 }
 
@@ -347,6 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.ok:
 			m.sess.Messages = msg.messages
 			m.lines = append(m.lines, line{role: "info", text: "Conversation compacted."})
+			m.lines = append(m.lines, completionLine(m.turnStart))
 		default:
 			m.lines = append(m.lines, line{role: "info", text: "Nothing to compact."})
 		}
@@ -789,9 +790,12 @@ func (m *Model) flushStreaming() {
 // finishTurn handles a turn's end: a canceled context (Escape) marks the
 // turn "[interrupted]" while preserving whatever partial output already
 // made it into the scrollback; any other error gets an "[error: ...]"
-// marker, matching the same convention. Either way m.sess.Messages is
-// replaced with the loop's returned history, which already includes
-// whatever partial assistant/tool output survived.
+// marker, matching the same convention. A clean completion instead appends
+// a completionLine (issue #166), the transcript's only trace that the
+// turn-in-progress indicator (issue #144) was ever there once busy goes
+// false and it vanishes. Either way m.sess.Messages is replaced with the
+// loop's returned history, which already includes whatever partial
+// assistant/tool output survived.
 func (m *Model) finishTurn(messages []provider.Message, err error) {
 	m.flushStreaming()
 	m.busy = false
@@ -802,10 +806,26 @@ func (m *Model) finishTurn(messages []provider.Message, err error) {
 
 	switch {
 	case err == nil:
+		m.lines = append(m.lines, completionLine(m.turnStart))
 	case errors.Is(err, context.Canceled):
 		m.lines = append(m.lines, line{role: "system", text: "[interrupted]"})
 	default:
 		m.lines = append(m.lines, line{role: "system", text: fmt.Sprintf("[error: %v]", err)})
+	}
+}
+
+// completionLine builds the one-line "turn finished" transcript entry
+// (issue #166): elapsed time since turnStart — the same source and
+// statusline.FormatDuration formatting the turn-in-progress indicator
+// itself displayed, so the figure matches what was on screen the instant
+// before the indicator disappeared — followed by the wall-clock time the
+// turn actually finished. Deliberately minimal (no token count, no active
+// tool) unlike the indicator it replaces.
+func completionLine(turnStart time.Time) line {
+	elapsed := statusline.FormatDuration(time.Since(turnStart))
+	return line{
+		role: "complete",
+		text: fmt.Sprintf("✓ Completed after %s · %s", elapsed, time.Now().Format("3:04 PM")),
 	}
 }
 
@@ -888,6 +908,8 @@ func renderLine(p theme.Palette, l line) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Red)).Render(l.text)
 	case "info":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Mauve)).Render(l.text)
+	case "complete":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Subtext)).Render(l.text)
 	case "raw":
 		// Already fully styled by the caller (e.g. renderSkillList), which
 		// needs per-segment styling renderLine's one-style-per-role
