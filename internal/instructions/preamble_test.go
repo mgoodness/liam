@@ -6,8 +6,8 @@ import (
 )
 
 func TestPreambleIsLiamsFixedIdentityBlock(t *testing.T) {
-	if !strings.HasPrefix(Preamble, "You are liam, an agentic CLI coding assistant.") {
-		t.Errorf("Preamble = %q, want it to open by naming liam", Preamble)
+	if !strings.HasPrefix(Preamble, "You are Liam, an agentic CLI coding assistant.") {
+		t.Errorf("Preamble = %q, want it to open by naming Liam", Preamble)
 	}
 	if !strings.Contains(Preamble, "\n\nGuidelines:\n") {
 		t.Error(`Preamble should separate its role sentence from a "Guidelines:" block with a blank line`)

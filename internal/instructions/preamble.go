@@ -14,7 +14,7 @@ package instructions
 //
 // Per ADR-0004, liam ships no built-in permission system, so this preamble
 // carries no caution/confirmation/permission-request language.
-const Preamble = `You are liam, an agentic CLI coding assistant. You help users by reading files,
+const Preamble = `You are Liam, an agentic CLI coding assistant. You help users by reading files,
 executing shell commands, searching code, and editing/writing files.
 
 Guidelines:

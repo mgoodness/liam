@@ -63,18 +63,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
-		fmt.Fprintln(stderr, "liam: OPENROUTER_API_KEY is not set")
+		fmt.Fprintln(stderr, "Liam: OPENROUTER_API_KEY is not set")
 		return 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "liam: %v\n", err)
+		fmt.Fprintf(stderr, "Liam: %v\n", err)
 		return 1
 	}
 	cfg, err := config.Load(cwd, *model)
 	if err != nil {
-		fmt.Fprintf(stderr, "liam: %v\n", err)
+		fmt.Fprintf(stderr, "Liam: %v\n", err)
 		return 1
 	}
 
@@ -83,7 +83,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// concatenated general-to-specific.
 	projectInstructions, err := instructions.Load(cwd)
 	if err != nil {
-		fmt.Fprintf(stderr, "liam: %v\n", err)
+		fmt.Fprintf(stderr, "Liam: %v\n", err)
 		return 1
 	}
 
@@ -95,7 +95,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	skills, err := discoverSkills(cwd, cfg, *prompt == "", stdin, stdout, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "liam: %v\n", err)
+		fmt.Fprintf(stderr, "Liam: %v\n", err)
 		return 1
 	}
 
@@ -106,12 +106,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var forceActivated string
 	if *skillName != "" {
 		if *prompt == "" {
-			fmt.Fprintln(stderr, "liam: -skill requires -p (headless mode)")
+			fmt.Fprintln(stderr, "Liam: -skill requires -p (headless mode)")
 			return 2
 		}
 		s, found := skill.Find(skills, *skillName)
 		if !found {
-			fmt.Fprintf(stderr, "liam: unknown skill %q\n", *skillName)
+			fmt.Fprintf(stderr, "Liam: unknown skill %q\n", *skillName)
 			return 1
 		}
 		forceActivated = s.Body
@@ -133,7 +133,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	hooks := &hook.Runner{
 		Hooks: cfg.Hooks,
 		Cwd:   cwd,
-		Warn:  func(msg string) { fmt.Fprintf(stderr, "liam: %s\n", msg) },
+		Warn:  func(msg string) { fmt.Fprintf(stderr, "Liam: %s\n", msg) },
 	}
 	loop := agent.Loop{
 		Provider: p,
@@ -227,7 +227,7 @@ func discoverSkills(cwd string, cfg config.Config, interactive bool, stdin io.Re
 		ProjectTrusted: projectTrusted,
 	})
 	for _, d := range diags {
-		fmt.Fprintf(stderr, "liam: skill: %s: %s\n", d.Path, d.Message)
+		fmt.Fprintf(stderr, "Liam: skill: %s: %s\n", d.Path, d.Message)
 	}
 	return skills, nil
 }
@@ -286,7 +286,7 @@ func runInteractive(deps interactiveDeps, stdin io.Reader, stdout, stderr io.Wri
 	opts := []tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout)}
 	p := tea.NewProgram(m, opts...)
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(stderr, "liam: %v\n", err)
+		fmt.Fprintf(stderr, "Liam: %v\n", err)
 		return 1
 	}
 	return 0
@@ -306,7 +306,7 @@ func runHeadless(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, p
 	req := buildRequest(cfg, prompt, systemPrompt)
 
 	ctx := context.Background()
-	mcp.Merge(ctx, loop.Tools, mcpLoader, func(msg string) { fmt.Fprintf(stderr, "liam: %s\n", msg) })
+	mcp.Merge(ctx, loop.Tools, mcpLoader, func(msg string) { fmt.Fprintf(stderr, "Liam: %s\n", msg) })
 
 	if loop.Hooks != nil {
 		loop.Hooks.SessionID = session.New().ID
@@ -334,14 +334,14 @@ func runHeadless(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, p
 				fmt.Fprintln(stdout)
 				wroteText = false
 			}
-			fmt.Fprintf(stderr, "liam: model=%s\n", e.ModelUsed)
+			fmt.Fprintf(stderr, "Liam: model=%s\n", e.ModelUsed)
 		}
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			fmt.Fprintln(stderr, "liam: [interrupted]")
+			fmt.Fprintln(stderr, "Liam: [interrupted]")
 		} else {
-			fmt.Fprintf(stderr, "liam: %v\n", err)
+			fmt.Fprintf(stderr, "Liam: %v\n", err)
 		}
 		return 1
 	}

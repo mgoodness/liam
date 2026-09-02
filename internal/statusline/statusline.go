@@ -264,7 +264,7 @@ func defaultRows(in Input, pal theme.Palette) []string {
 	badge := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pal.Base)).
 		Background(lipgloss.Color(pal.Mauve)).
-		Bold(true).Padding(0, 1).Render("liam")
+		Bold(true).Padding(0, 1).Render("Liam")
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Subtext))
 
 	var segs []string
