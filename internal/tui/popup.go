@@ -131,7 +131,7 @@ func renderPopupDialog(p theme.Palette, width int, content string) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(p.Overlay)).
-		Background(lipgloss.Color(p.Surface)).
+		Background(lipgloss.Color(p.Base)).
 		Foreground(lipgloss.Color(p.Text)).
 		Width(width).
 		Height(popupDialogHeight).
