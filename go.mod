@@ -9,6 +9,7 @@ require (
 	github.com/OpenRouterTeam/go-sdk v0.7.97
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/sahilm/fuzzy v0.1.3
 	golang.org/x/net v0.58.0
 )
 

@@ -3,7 +3,9 @@
 // a bubbles/textarea input line), Catppuccin Frappe/Latte theming
 // auto-detected at startup, and the /quit, /clear, /skills, /compact,
 // /<skill-name>, Escape-cancel session commands wired to the agent loop's
-// context.Context cancellation.
+// context.Context cancellation. A fuzzy-matched popup (issue #137) suggests
+// slash commands as the user types one at the start of the input, purely
+// cosmetic — it never changes what a submitted "/..." actually dispatches to.
 //
 // The customizable statusLine (issue #60) is a status block rendered below
 // the input line, as the screen's bottom footer (issue #123), refreshed on
@@ -107,6 +109,7 @@ type Model struct {
 	findSearcher tool.FindSearcher // set via WithFindSearcher; nil disables "@"-file-reference autocomplete
 	hist         history           // Up/Down input-recall stack (issue #58), session-only
 	mention      mentionState      // in-progress "@"-file-reference autocomplete, if any
+	slash        slashState        // in-progress "/"-command autocomplete, if any (issue #137)
 
 	cwd string // set via WithCwd; statusLine's "cwd" field and the built-in renderer's git-info root
 
@@ -348,10 +351,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey dispatches one key press. While the "@"-file-reference popup
 // (m.mention) is active it owns Up/Down/Tab/Enter/Esc outright — history
-// recall and turn-cancellation are suspended until it closes. Otherwise
-// Up/Down are routed to history recall or ordinary cursor movement by
-// handleUp/handleDown, and every other key falls through to the textarea,
-// after which the mention state is recomputed from the new cursor position.
+// recall and turn-cancellation are suspended until it closes. The
+// "/"-command popup (m.slash) owns Up/Down/Tab/Esc the same way, but
+// deliberately not Enter: a fully-typed command must still submit
+// immediately (see the comment in that block). The two popups are mutually
+// exclusive in practice — a token can only start with one leading
+// character at a time. Otherwise Up/Down are routed to history recall or
+// ordinary cursor movement by handleUp/handleDown, and every other key
+// falls through to the textarea, after which both popups' state is
+// recomputed from the new cursor position.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.mention.active {
 		switch msg.String() {
@@ -367,6 +375,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mention = mentionState{}
 			return m, nil
 		}
+	}
+
+	if m.slash.active {
+		switch msg.String() {
+		case "up":
+			m.slash.selected = (m.slash.selected - 1 + len(m.slash.matches)) % max(1, len(m.slash.matches))
+			return m, nil
+		case "down":
+			m.slash.selected = (m.slash.selected + 1) % max(1, len(m.slash.matches))
+			return m, nil
+		case "tab":
+			return m.selectSlash(), nil
+		case "esc":
+			m.slash = slashState{}
+			return m, nil
+		}
+		// Enter is deliberately not intercepted here, unlike the "@"-mention
+		// popup: a fully-typed unambiguous command (e.g. "/quit") followed
+		// by Enter must submit immediately rather than only autocomplete,
+		// matching cmd/liam's own "/quit\r" end-to-end test. It falls
+		// through to the switch below, which calls submit() — and submit()
+		// clears m.slash so the popup can't linger over an emptied input.
 	}
 
 	switch msg.String() {
@@ -403,6 +433,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.updateMention()
+	m.updateSlash()
 	return m, cmd
 }
 
@@ -527,7 +558,16 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 	m.input.Reset()
 	m.hist.add(text)
+	// Enter isn't intercepted by the slash popup (handleKey), so a
+	// fully-typed command can reach here while m.slash is still active —
+	// clear it now rather than leaving it to render stale over the just-
+	// emptied input until the next keystroke recomputes it.
+	m.slash = slashState{}
 
+	// This switch is the actual dispatch table for the 4 reserved
+	// commands; builtinCommands (slashcommand.go) only mirrors these names
+	// for the popup and must be kept in sync by hand — nothing ties the
+	// two together mechanically.
 	switch text {
 	case "/quit":
 		return m, tea.Quit
@@ -722,6 +762,9 @@ func (m Model) View() tea.View {
 	content := m.viewport.View() + "\n" + m.input.View()
 	if m.mention.active {
 		content += "\n" + renderMentionPopup(m.pal, m.mention)
+	}
+	if m.slash.active {
+		content += "\n" + renderSlashPopup(m.pal, m.slash)
 	}
 	if statusBlock := m.renderStatusBlock(); statusBlock != "" {
 		content += "\n" + statusBlock
