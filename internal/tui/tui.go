@@ -22,6 +22,13 @@
 // typing and input-history recall. The viewport auto-follows the bottom
 // as new content streams in; any other scroll pins the position, and End
 // resumes auto-follow.
+//
+// Click-drag transcript selection (issue #142, selection.go) rides the
+// same MouseModeCellMotion that scroll-wheel support turned on: a drag
+// starting within the transcript's own screen region highlights the
+// spanned text in reverse video, and releasing the button copies the
+// plain-text span to the system clipboard via OSC-52
+// (tea.SetClipboard) — see docs/adr/0006-osc52-transcript-selection.md.
 package tui
 
 import (
@@ -94,6 +101,7 @@ type Model struct {
 
 	viewport     viewport.Model // scrolls the read-only transcript (issue #59)
 	followBottom bool           // true = auto-follow new content; false while a manual scroll has pinned the position away from the bottom
+	sel          selectionState // in-progress/completed click-drag transcript selection (issue #142), if any
 
 	input  textarea.Model
 	width  int
@@ -266,6 +274,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.SetWidth(m.width)
+		// A resize can change how content reflows (width-dependent wrapping
+		// in renderTranscript), which would leave any absolute-column
+		// selection highlighting the wrong span — simplest to just drop it,
+		// same as a fresh Model's zero value.
+		m.sel = selectionState{}
 		m.refreshViewport()
 		return m, nil
 
@@ -284,6 +297,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, _ = m.viewport.Update(msg)
 		m.pinIfScrolled(before)
 		return m, nil
+
+	case tea.MouseClickMsg:
+		return m.handleMouseClick(msg)
+
+	case tea.MouseMotionMsg:
+		return m.handleMouseMotion(msg)
+
+	case tea.MouseReleaseMsg:
+		return m.handleMouseRelease(msg)
 
 	case streamMsg:
 		refresh := m.handleEvent(msg.ev)
@@ -507,9 +529,19 @@ func (m *Model) syncViewportDims() {
 // bottom so streamed content stays visible; once a manual scroll has
 // pinned the position (m.followBottom == false), the offset is left alone
 // until End resumes auto-follow.
+//
+// m.sel's reverse-video span (issue #142), when it has one, is overlaid
+// onto the freshly-rendered lines before they reach the viewport —
+// recomputed on every refresh rather than cached, since streamed content,
+// a resize, or a scroll can all change what's on screen while a selection
+// is in progress or just completed.
 func (m *Model) refreshViewport() {
 	m.syncViewportDims()
-	m.viewport.SetContent(m.renderTranscript())
+	lines := strings.Split(m.renderTranscript(), "\n")
+	if m.sel.hasRange() {
+		lines = highlightSelection(lines, m.sel)
+	}
+	m.viewport.SetContentLines(lines)
 	if m.followBottom {
 		m.viewport.GotoBottom()
 	}
@@ -585,6 +617,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.statusTracker.Reset()
 		m.lines = nil
 		m.streaming.Reset()
+		m.sel = selectionState{}
 		m.refreshViewport()
 		return m, m.requestStatusRefresh()
 	case "/skills":
