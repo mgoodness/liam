@@ -259,7 +259,7 @@ func TestRefreshViewportResyncsDimsWhenInputGrows(t *testing.T) {
 	next, _ = mm.Update(systemLineMsg{text: "note"})
 	after := next.(Model)
 
-	wantHeight := max(0, after.height-after.input.Height()-1)
+	wantHeight := max(0, after.height-after.input.Height()-inputBorderHeight-1)
 	if after.viewport.Height() != wantHeight {
 		t.Errorf("viewport.Height() = %d, want %d (resynced from the grown input)", after.viewport.Height(), wantHeight)
 	}

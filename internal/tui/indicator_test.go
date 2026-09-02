@@ -168,7 +168,7 @@ func TestViewCursorRowIncludesIndicatorHeightWhenBusy(t *testing.T) {
 	}
 
 	v := m.View()
-	want := cur.Y + m.viewport.Height() + 1 + indicatorHeight
+	want := cur.Y + m.viewport.Height() + 1 + indicatorHeight + inputBorderTopHeight
 	if v.Cursor == nil || v.Cursor.Y != want {
 		t.Errorf("View().Cursor.Y = %v, want %d (indicatorHeight added while busy)", v.Cursor, want)
 	}

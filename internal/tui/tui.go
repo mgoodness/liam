@@ -247,7 +247,6 @@ func endSession(loop agent.Loop) {
 
 func newTextarea() textarea.Model {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message… (Enter to send, Shift+Enter/Ctrl+J for a newline)"
 	ta.Prompt = "> "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
@@ -528,13 +527,16 @@ func (m *Model) recallOrMove(msg tea.KeyPressMsg, atBoundary bool, recall func(*
 // separator row baked into renderTranscript's trailing newline; the
 // statusLine block (when it has any rows) reserves one row per line on
 // top of that, regardless of the block's own on-screen position (the
-// bottom footer, below the input). While a popup (m.mention/m.slash) is
-// active, popupDialogHeight is reserved too — carved out of the viewport's
-// budget only for as long as the dialog is actually on screen (issue #139),
-// not permanently. Likewise, indicatorHeight is reserved only while m.busy
-// (issue #144's animated turn-in-progress indicator).
+// bottom footer, below the input). inputBorderHeight reserves
+// renderInputBox's top and bottom border rows, unconditionally — unlike
+// the popup/indicator reservations below, the input box is always on
+// screen. While a popup (m.mention/m.slash) is active, popupDialogHeight
+// is reserved too — carved out of the viewport's budget only for as long
+// as the dialog is actually on screen (issue #139), not permanently.
+// Likewise, indicatorHeight is reserved only while m.busy (issue #144's
+// animated turn-in-progress indicator).
 func (m *Model) syncViewportDims() {
-	reserved := m.input.Height() + 1 + len(m.statusLines)
+	reserved := m.input.Height() + inputBorderHeight + 1 + len(m.statusLines)
 	if m.popupActive() {
 		reserved += popupDialogHeight
 	}
@@ -850,7 +852,8 @@ func (m Model) View() tea.View {
 		content += m.renderIndicator() + "\n"
 		inputRow += indicatorHeight
 	}
-	content += m.input.View()
+	content += renderInputBox(m.pal, m.width, m.input.View())
+	inputRow += inputBorderTopHeight
 	if statusBlock := m.renderStatusBlock(); statusBlock != "" {
 		content += "\n" + statusBlock
 	}
@@ -861,15 +864,41 @@ func (m Model) View() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	// Offset the textarea's own cursor position by inputRow, the row the
 	// input actually starts on above (the viewport's fixed row count, the
-	// blank separator line, and popupDialogHeight while a popup is active).
-	// The statusLine block renders below the input, so its row count never
-	// factors in here. This doesn't account for line-wrapped rows (no
-	// width-aware wrapping yet), so a very long unwrapped line can throw it
-	// off; harmless beyond a cosmetic cursor-position glitch.
+	// blank separator line, popupDialogHeight while a popup is active, and
+	// the input box's own top border row). The statusLine block renders
+	// below the input, so its row count never factors in here. This
+	// doesn't account for line-wrapped rows (no width-aware wrapping yet),
+	// so a very long unwrapped line can throw it off; harmless beyond a
+	// cosmetic cursor-position glitch.
 	if cur := m.input.Cursor(); cur != nil {
 		v.Cursor = tea.NewCursor(cur.X, cur.Y+inputRow)
 	}
 	return v
+}
+
+// inputBorderTopHeight and inputBorderBottomHeight are the one-row-each
+// top and bottom border lines renderInputBox draws around the input
+// textarea's own content (no left/right sides) — folded into View()'s
+// inputRow (top only, since that's what shifts where the input's own text
+// starts) and syncViewportDims' reserved budget (both, the input box's
+// full on-screen footprint), the same way popupDialogHeight and
+// indicatorHeight already are.
+const (
+	inputBorderTopHeight    = 1
+	inputBorderBottomHeight = 1
+	inputBorderHeight       = inputBorderTopHeight + inputBorderBottomHeight
+)
+
+// renderInputBox wraps the input textarea's already-rendered content in a
+// top-and-bottom-only border (no left/right sides) — the input area's
+// visual separator from the transcript above and the status block below.
+func renderInputBox(p theme.Palette, width int, content string) string {
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), true, false, true, false).
+		BorderForeground(lipgloss.Color(p.Overlay)).
+		Background(lipgloss.Color(p.Base)).
+		Width(width).
+		Render(content)
 }
 
 func renderLine(p theme.Palette, l line) string {
@@ -897,10 +926,9 @@ func renderLine(p theme.Palette, l line) string {
 func applyTextareaTheme(ta *textarea.Model, p theme.Palette) {
 	s := textarea.DefaultStyles(p.Dark)
 	for _, state := range []*textarea.StyleState{&s.Focused, &s.Blurred} {
-		state.Base = state.Base.Background(lipgloss.Color(p.Surface)).Foreground(lipgloss.Color(p.Text))
+		state.Base = state.Base.Background(lipgloss.Color(p.Base)).Foreground(lipgloss.Color(p.Text))
 		state.Text = state.Text.Foreground(lipgloss.Color(p.Text))
 		state.Prompt = state.Prompt.Foreground(lipgloss.Color(p.Green)).Bold(true)
-		state.Placeholder = state.Placeholder.Foreground(lipgloss.Color(p.Overlay))
 	}
 	ta.SetStyles(s)
 }
