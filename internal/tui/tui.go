@@ -876,31 +876,6 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// inputBorderTopHeight and inputBorderBottomHeight are the one-row-each
-// top and bottom border lines renderInputBox draws around the input
-// textarea's own content (no left/right sides) — folded into View()'s
-// inputRow (top only, since that's what shifts where the input's own text
-// starts) and syncViewportDims' reserved budget (both, the input box's
-// full on-screen footprint), the same way popupDialogHeight and
-// indicatorHeight already are.
-const (
-	inputBorderTopHeight    = 1
-	inputBorderBottomHeight = 1
-	inputBorderHeight       = inputBorderTopHeight + inputBorderBottomHeight
-)
-
-// renderInputBox wraps the input textarea's already-rendered content in a
-// top-and-bottom-only border (no left/right sides) — the input area's
-// visual separator from the transcript above and the status block below.
-func renderInputBox(p theme.Palette, width int, content string) string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), true, false, true, false).
-		BorderForeground(lipgloss.Color(p.Overlay)).
-		Background(lipgloss.Color(p.Base)).
-		Width(width).
-		Render(content)
-}
-
 func renderLine(p theme.Palette, l line) string {
 	switch l.role {
 	case "user":
@@ -929,6 +904,12 @@ func applyTextareaTheme(ta *textarea.Model, p theme.Palette) {
 		state.Base = state.Base.Background(lipgloss.Color(p.Base)).Foreground(lipgloss.Color(p.Text))
 		state.Text = state.Text.Foreground(lipgloss.Color(p.Text))
 		state.Prompt = state.Prompt.Foreground(lipgloss.Color(p.Green)).Bold(true)
+		// bubbles' own default gives the cursor's current line a hardcoded
+		// near-black/near-white background (Focused.CursorLine), which
+		// Inherit(Base) doesn't override since CursorLine already sets its
+		// own Background — left alone, the current line renders a
+		// different, theme-independent color from the rest of the input.
+		state.CursorLine = state.CursorLine.Background(lipgloss.Color(p.Base))
 	}
 	ta.SetStyles(s)
 }

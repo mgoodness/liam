@@ -6,21 +6,21 @@ package theme
 // Palette is the subset of Catppuccin colors liam's TUI and headless output
 // use.
 type Palette struct {
-	Base, Text, Subtext, Overlay, Surface string
-	Blue, Green, Yellow, Red, Mauve       string
-	Dark                                  bool
+	Base, Text, Subtext, Overlay    string
+	Blue, Green, Yellow, Red, Mauve string
+	Dark                            bool
 }
 
 // Frappe is Catppuccin's dark palette, liam's default.
 var Frappe = Palette{
-	Base: "#303446", Text: "#c6d0f5", Subtext: "#a5adce", Overlay: "#737994", Surface: "#414559",
+	Base: "#303446", Text: "#c6d0f5", Subtext: "#a5adce", Overlay: "#737994",
 	Blue: "#8caaee", Green: "#a6d189", Yellow: "#e5c890", Red: "#e78284", Mauve: "#ca9ee6",
 	Dark: true,
 }
 
 // Latte is Catppuccin's light palette.
 var Latte = Palette{
-	Base: "#eff1f5", Text: "#4c4f69", Subtext: "#6c6f85", Overlay: "#9ca0b0", Surface: "#ccd0da",
+	Base: "#eff1f5", Text: "#4c4f69", Subtext: "#6c6f85", Overlay: "#9ca0b0",
 	Blue: "#1e66f5", Green: "#40a02b", Yellow: "#df8e1d", Red: "#d20f39", Mauve: "#8839ef",
 	Dark: false,
 }

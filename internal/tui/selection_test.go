@@ -77,9 +77,9 @@ func TestClickWithoutDragCopiesNothingAndLeavesNoHighlight(t *testing.T) {
 func TestDragSelectsAndCopiesSpannedText(t *testing.T) {
 	m := sized(t, New(agent.Loop{}, config.Config{}, nil), 30)
 	// sized's 30 "line N" rows plus the trailing blank separator row (31
-	// content lines total) against a 6-row viewport (issue #163's
-	// input-box top/bottom border shrinks it from 8) put the visible rows
-	// at content lines 25..30 (YOffset 25): screen row 0 is "line 25".
+	// content lines total) against a 6-row viewport (the input box's
+	// top/bottom border rows shrink it from 8) put the visible rows at
+	// content lines 25..30 (YOffset 25): screen row 0 is "line 25".
 	m = click(t, m, 0, 0)
 	m = drag(t, m, m.width-1, 2)
 
