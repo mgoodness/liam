@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
+	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/theme"
 )
@@ -29,10 +30,7 @@ type builtinCommand struct {
 }
 
 var builtinCommands = []builtinCommand{
-	// quit has no description: the README lists it bare, with no
-	// parenthetical, and this popup's descriptions are meant to match that
-	// wording rather than invent copy the README doesn't have.
-	{"quit", ""},
+	{"quit", "exit liam"},
 	{"clear", "reset the session"},
 	{"compact", "condense the conversation history on demand"},
 	{"skills", "list discovered skills"},
@@ -212,15 +210,28 @@ func (m Model) selectSlash() Model {
 	return m
 }
 
+// slashRowPrefixWidth is the width, in runes, of the "› /" / "  /" every
+// row opens with — both are 3 runes, so it's one constant rather than a
+// per-row measurement.
+const slashRowPrefixWidth = 3
+
+// slashColumnSeparator sits between the padded name column and the
+// description column.
+const slashColumnSeparator = " — "
+
 // renderSlashPopup renders the "/"-command autocomplete match list shown
-// in the floating popup dialog above the input while ss is active: the
-// selected row gets
-// renderMentionPopup's whole-line highlight, every row shows the
-// candidate's description (when it has one — /quit has none, see
-// builtinCommands), and an unselected row's matched characters are bolded
+// in the floating popup dialog above the input while ss is active, as a
+// two-column table (issue #148): every row's name is padded to a shared
+// width so descriptions all start at the same column, and a description
+// too long for the popup's width is hard-truncated with a trailing
+// ellipsis rather than wrapping. The selected row gets renderMentionPopup's
+// whole-line highlight; an unselected row's matched characters are bolded
 // per sahilm/fuzzy's MatchedIndexes — issue #137 asked for this to be
-// prototyped and judged on how it looks; it earned its keep.
-func renderSlashPopup(p theme.Palette, ss slashState) string {
+// prototyped and judged on how it looks; it earned its keep. width is the
+// popup dialog's total on-screen width (renderPopupDialog's Width, border
+// included); width <= 0 disables truncation and padding-cap sizing, same
+// convention as render.SkillList.
+func renderSlashPopup(p theme.Palette, ss slashState, width int) string {
 	if len(ss.matches) == 0 {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Subtext)).Italic(true).Render("  (no matching commands)")
 	}
@@ -229,31 +240,57 @@ func renderSlashPopup(p theme.Palette, ss slashState) string {
 	plain := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Subtext))
 	highlight := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Blue)).Bold(true)
 
+	names := make([]string, len(ss.matches))
+	for i, mtch := range ss.matches {
+		names[i] = mtch.name
+	}
+	overhead := popupBorderWidth + slashRowPrefixWidth + len([]rune(slashColumnSeparator))
+	var nameWidth, descWidth int
+	if width > 0 {
+		nameWidth, descWidth = render.TableColumns(names, width, overhead, render.MinDescWidth)
+	} else {
+		nameWidth = render.ColumnWidth(names, 0)
+	}
+
 	var b strings.Builder
 	for i, mtch := range ss.matches {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
+		name := mtch.name
+		desc := mtch.description
+		if width > 0 {
+			if l := len([]rune(name)); l > nameWidth {
+				name = render.TruncateWidth(name, nameWidth)
+			}
+			desc = render.TruncateWidth(desc, descWidth)
+		}
+		padded := fmt.Sprintf("%-*s", nameWidth, name)
+
 		if i == ss.selected {
-			b.WriteString(selected.Render(fmt.Sprintf("› /%s%s", mtch.name, descriptionSuffix(mtch.description))))
+			b.WriteString(selected.Render(fmt.Sprintf("› /%s%s", padded, descriptionSuffix(desc))))
 			continue
 		}
 		b.WriteString(plain.Render("  /"))
-		b.WriteString(renderMatchedName(mtch.name, mtch.matchedIndexes, plain, highlight))
-		b.WriteString(plain.Render(descriptionSuffix(mtch.description)))
+		b.WriteString(renderMatchedName(name, mtch.matchedIndexes, plain, highlight))
+		if pad := nameWidth - len([]rune(name)); pad > 0 {
+			b.WriteString(plain.Render(strings.Repeat(" ", pad)))
+		}
+		b.WriteString(plain.Render(descriptionSuffix(desc)))
 	}
 	return b.String()
 }
 
 // descriptionSuffix formats description as " — <description>" for
-// appending after a candidate's name, or "" when description is empty
-// (/quit's case) so the row doesn't render a dangling " — " with nothing
-// after it.
+// appending after a candidate's name, or "" when description is empty so
+// the row doesn't render a dangling " — " with nothing after it — no
+// built-in currently has an empty description, but a future one (or a
+// skill with an empty one) still renders cleanly.
 func descriptionSuffix(description string) string {
 	if description == "" {
 		return ""
 	}
-	return " — " + description
+	return slashColumnSeparator + description
 }
 
 // renderMatchedName renders name rune-by-rune, styling the positions

@@ -100,6 +100,12 @@ func moveCursorToOffset(ta *textarea.Model, value string, offset int) {
 // resizing".
 const popupDialogHeight = maxMentionMatches + 2
 
+// popupBorderWidth is how many of a popup dialog's width columns
+// renderPopupDialog's RoundedBorder eats — 1 each side, no padding — so a
+// content renderer (renderSlashPopup) can size its own columns against
+// what's actually left over.
+const popupBorderWidth = 2
+
 // renderPopupDialog frames content — renderMentionPopup's or
 // renderSlashPopup's already-styled match list — as a bordered floating
 // dialog (issue #139's "floating bordered dialog", replacing the previous
@@ -134,7 +140,7 @@ func (m Model) activePopupContent() string {
 	case m.mention.active:
 		return renderMentionPopup(m.pal, m.mention)
 	case m.slash.active:
-		return renderSlashPopup(m.pal, m.slash)
+		return renderSlashPopup(m.pal, m.slash, m.width)
 	}
 	return ""
 }

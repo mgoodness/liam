@@ -56,17 +56,9 @@ func summarizeResult(content string, isError bool) string {
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i] + "…"
 	}
-	line = truncate(line, maxResultLine)
+	line = TruncateWidth(line, maxResultLine)
 	if isError {
 		return "error: " + line
 	}
 	return line
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
 }
