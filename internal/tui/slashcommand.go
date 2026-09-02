@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
@@ -142,24 +141,12 @@ type slashState struct {
 	selected int
 }
 
-// findSlashStart scans line backward from col (exclusive) for an unbroken
-// "/" token anchored at column 0. Unlike findMentionStart's "start of line
-// OR after whitespace" for "@", a "/" is only ever a command candidate at
-// the very first column — anywhere else ("and/or", a path, a date) it's
+// findSlashStart is findTokenStart with the "/" token's boundary rule: only
+// column 0 counts — unlike findMentionStart's "start of line OR after
+// whitespace" for "@", a "/" anywhere else ("and/or", a path, a date) is
 // ordinary text.
 func findSlashStart(line []rune, col int) (int, bool) {
-	for i := col - 1; i >= 0; i-- {
-		switch {
-		case line[i] == '/':
-			if i == 0 {
-				return 0, true
-			}
-			return 0, false
-		case unicode.IsSpace(line[i]):
-			return 0, false
-		}
-	}
-	return 0, false
+	return findTokenStart(line, col, '/', false)
 }
 
 // updateSlash recomputes m.slash from the textarea's current cursor
@@ -187,10 +174,7 @@ func (m *Model) updateSlash() {
 	query := string(lineRunes[start+1 : col])
 	matches := matchSlashQuery(slashCandidates(m.skills), query)
 
-	selected := 0
-	if m.slash.active && m.slash.selected < len(matches) {
-		selected = m.slash.selected
-	}
+	selected := popupSelectedIndex(m.slash.active, m.slash.selected, len(matches))
 
 	m.slash = slashState{
 		active:   true,
@@ -229,7 +213,8 @@ func (m Model) selectSlash() Model {
 }
 
 // renderSlashPopup renders the "/"-command autocomplete match list shown
-// below the input while ss is active: the selected row gets
+// in the floating popup dialog above the input while ss is active: the
+// selected row gets
 // renderMentionPopup's whole-line highlight, every row shows the
 // candidate's description (when it has one — /quit has none, see
 // builtinCommands), and an unselected row's matched characters are bolded
