@@ -28,6 +28,10 @@ _Avoid_: plugin, callback, trigger.
 A packaged, on-demand set of instructions (markdown plus optional scripts, per the agentskills.io spec) that the model can choose to load mid-conversation to change how it approaches a specific kind of task.
 _Avoid_: hook, plugin, prompt.
 
+**Slash command**:
+User input beginning with `/`: either one of liam's four reserved built-ins (`/quit`, `/clear`, `/compact`, `/skills`) or a bare `/<skill-name>` that force-activates a matching Skill, bypassing model judgment. Only recognized when it's the very start of the input (row 0, column 0) — a `/` elsewhere is ordinary text.
+_Avoid_: command (bare — could be confused with a tool call or CLI flag).
+
 **Plugin**:
 An installable, distributable bundle (per the agent-plugins.org spec) that extends the harness itself by registering new tools, skills, hooks, or MCP servers together as one unit.
 _Avoid_: skill, extension, addon.

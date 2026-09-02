@@ -63,7 +63,7 @@ Flags:
 | `-skill`   | Force-activate a skill by name before the prompt (headless mode only, requires `-p`). |
 | `-version` | Print the version and exit.                                                      |
 
-Interactive-mode slash commands: `/quit`, `/clear` (reset the session), `/compact` (condense the conversation history on demand), `/skills` (list discovered skills), `/<skill-name>` (force-activate a skill by name, bypassing model judgment).
+Interactive-mode slash commands: `/quit`, `/clear` (reset the session), `/compact` (condense the conversation history on demand), `/skills` (list discovered skills), `/<skill-name>` (force-activate a skill by name, bypassing model judgment). Typing `/` at the very start of the input opens a fuzzy-matched popup suggesting these (Up/Down to navigate, Tab to autocomplete — Enter still submits immediately, even with the popup open).
 
 ## Configuration
 
