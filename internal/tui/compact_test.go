@@ -45,8 +45,11 @@ func TestSubmitSlashCompactCondensesHistoryAndReportsSuccess(t *testing.T) {
 	if len(final.sess.Messages) >= len(history) {
 		t.Errorf("sess.Messages len = %d, want fewer than %d after compaction", len(final.sess.Messages), len(history))
 	}
-	if len(final.lines) != 1 || final.lines[0].role != "info" || final.lines[0].text != "Conversation compacted." {
-		t.Fatalf("lines = %+v, want a single \"Conversation compacted.\" info line", final.lines)
+	if len(final.lines) != 2 || final.lines[0].role != "info" || final.lines[0].text != "Conversation compacted." {
+		t.Fatalf("lines = %+v, want \"Conversation compacted.\" followed by the completion line", final.lines)
+	}
+	if final.lines[1].role != "complete" {
+		t.Errorf("lines[1].role = %q, want \"complete\"", final.lines[1].role)
 	}
 }
 

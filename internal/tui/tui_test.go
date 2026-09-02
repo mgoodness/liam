@@ -5,8 +5,10 @@ import (
 	"errors"
 	"image/color"
 	"iter"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -105,11 +107,14 @@ func TestSubmitStreamsResponseAndAppendsAssistantLine(t *testing.T) {
 	if final.busy {
 		t.Error("busy = true after turn finished, want false")
 	}
-	if len(final.lines) != 2 {
-		t.Fatalf("lines after turn = %+v, want 2 (user + assistant)", final.lines)
+	if len(final.lines) != 3 {
+		t.Fatalf("lines after turn = %+v, want 3 (user + assistant + completion)", final.lines)
 	}
 	if final.lines[1].role != "assistant" || final.lines[1].text != "hello" {
 		t.Errorf("lines[1] = %+v, want assistant %q", final.lines[1], "hello")
+	}
+	if final.lines[2].role != "complete" {
+		t.Errorf("lines[2].role = %q, want %q", final.lines[2].role, "complete")
 	}
 	if final.sess.CostUSD != 0.01 {
 		t.Errorf("sess.CostUSD = %v, want 0.01", final.sess.CostUSD)
@@ -174,9 +179,9 @@ func TestSubmitDispatchesToolCallAndRendersResultLine(t *testing.T) {
 	next, cmd := m.submit()
 	final := drain(t, next.(Model), cmd)
 
-	// user, "looking" (flushed before the tool call), tool result, "done"
-	if len(final.lines) != 4 {
-		t.Fatalf("lines = %+v, want 4", final.lines)
+	// user, "looking" (flushed before the tool call), tool result, "done", completion
+	if len(final.lines) != 5 {
+		t.Fatalf("lines = %+v, want 5", final.lines)
 	}
 	if final.lines[1].role != "assistant" || final.lines[1].text != "looking" {
 		t.Errorf("lines[1] = %+v, want assistant %q (flushed before the tool call)", final.lines[1], "looking")
@@ -190,6 +195,9 @@ func TestSubmitDispatchesToolCallAndRendersResultLine(t *testing.T) {
 	}
 	if final.lines[3].role != "assistant" || final.lines[3].text != "done" {
 		t.Errorf("lines[3] = %+v, want assistant %q", final.lines[3], "done")
+	}
+	if final.lines[4].role != "complete" {
+		t.Errorf("lines[4].role = %q, want %q", final.lines[4].role, "complete")
 	}
 }
 
@@ -403,6 +411,31 @@ func TestFinishTurnMarksErrorForNonCancelFailures(t *testing.T) {
 
 	if len(m.lines) != 1 || m.lines[0].role != "system" || m.lines[0].text != "[error: boom]" {
 		t.Errorf("lines = %+v, want a single [error: boom] system line", m.lines)
+	}
+}
+
+// completionLinePattern matches completionLine's "✓ Completed @ <HH:MM>
+// after <elapsed>" shape (issue #166, 24-hour clock) regardless of the
+// actual wall-clock time or elapsed duration, both of which vary with the
+// moment the test runs.
+var completionLinePattern = regexp.MustCompile(`^✓ Completed @ \d{2}:\d{2} after \S+$`)
+
+func TestFinishTurnAppendsCompletionLineOnSuccess(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	m.busy = true
+	m.turnStart = time.Now().Add(-1 * time.Second)
+
+	m.finishTurn([]provider.Message{{Role: "user", Content: "hi"}}, nil)
+
+	if len(m.lines) != 1 {
+		t.Fatalf("lines = %+v, want a single completion line", m.lines)
+	}
+	got := m.lines[0]
+	if got.role != "complete" {
+		t.Errorf("lines[0].role = %q, want %q", got.role, "complete")
+	}
+	if !completionLinePattern.MatchString(got.text) {
+		t.Errorf("lines[0].text = %q, want it to match %s", got.text, completionLinePattern)
 	}
 }
 

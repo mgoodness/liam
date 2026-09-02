@@ -67,8 +67,11 @@ func TestSubmitBareSlashNameWithTrailingTextStartsATurn(t *testing.T) {
 	if fp.lastReq.Messages == nil || fp.lastReq.Messages[len(fp.lastReq.Messages)-1].Content != "/implement #123" {
 		t.Fatalf("lastReq.Messages = %+v, want the full literal command \"/implement #123\" sent as the last message", fp.lastReq.Messages)
 	}
-	if len(mm.lines) != 1 || mm.lines[0].role != "user" || mm.lines[0].text != "/implement #123" {
-		t.Errorf("lines = %+v, want a single user line reading \"/implement #123\" — no confirmation line, the literal command printed like any other input", mm.lines)
+	if len(mm.lines) != 2 || mm.lines[0].role != "user" || mm.lines[0].text != "/implement #123" {
+		t.Errorf("lines = %+v, want a user line reading \"/implement #123\" (no confirmation line, the literal command printed like any other input) followed by the completion line", mm.lines)
+	}
+	if mm.lines[1].role != "complete" {
+		t.Errorf("lines[1].role = %q, want %q", mm.lines[1].role, "complete")
 	}
 }
 
