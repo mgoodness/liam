@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
@@ -289,7 +290,7 @@ func TestSubmitSlashClearFiresSessionEndThenSessionStart(t *testing.T) {
 	}
 }
 
-func TestSubmitSlashSkillsRendersCatalogAsInfoLine(t *testing.T) {
+func TestSubmitSlashSkillsRendersCatalogAsRawLine(t *testing.T) {
 	skills := []skill.Skill{
 		{Name: "commit-messages", Description: "Write conventional commit messages.", Scope: skill.ScopeUser},
 	}
@@ -302,11 +303,11 @@ func TestSubmitSlashSkillsRendersCatalogAsInfoLine(t *testing.T) {
 	if cmd != nil {
 		t.Error("submit(\"/skills\") returned a non-nil cmd, want nil (no turn started)")
 	}
-	if len(mm.lines) != 1 || mm.lines[0].role != "info" {
-		t.Fatalf("lines = %+v, want a single info line", mm.lines)
+	if len(mm.lines) != 1 || mm.lines[0].role != "raw" {
+		t.Fatalf("lines = %+v, want a single raw line", mm.lines)
 	}
-	if !strings.Contains(mm.lines[0].text, "commit-messages") {
-		t.Errorf("lines[0].text = %q, want it to mention the discovered skill", mm.lines[0].text)
+	if got := ansi.Strip(mm.lines[0].text); !strings.Contains(got, "commit-messages") {
+		t.Errorf("lines[0].text = %q, want it to mention the discovered skill", got)
 	}
 }
 
@@ -317,8 +318,8 @@ func TestSubmitSlashSkillsWithNoneDiscovered(t *testing.T) {
 	next, _ := m.submit()
 	mm := next.(Model)
 
-	if len(mm.lines) != 1 || mm.lines[0].text != "No skills discovered." {
-		t.Fatalf("lines = %+v, want a single \"No skills discovered.\" info line", mm.lines)
+	if len(mm.lines) != 1 || ansi.Strip(mm.lines[0].text) != "No skills discovered." {
+		t.Fatalf("lines = %+v, want a single \"No skills discovered.\" raw line", mm.lines)
 	}
 }
 

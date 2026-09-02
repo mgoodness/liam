@@ -1,57 +1,46 @@
 package render
 
 import (
-	"fmt"
-	"strings"
+	"sort"
 
 	"github.com/mgoodness/liam/internal/skill"
 )
 
-// SkillList formats a discovered skill catalog for the /skills command as
-// a two-column table — "name (scope)" padded to a shared width, then
-// " — description" — sorted the same way skill.Discover already returns
-// them (by name). width is the terminal width to align and truncate the
-// table against (issue #148); width <= 0 (e.g. a headless caller with no
-// terminal) disables both truncation and label-column capping entirely,
-// matching statusline.truncateRows' convention. A skill with
-// disable-model-invocation: true — excluded from the model-driven
-// activate_skill catalog — is marked accordingly, since it's still
-// force-activatable directly.
-func SkillList(skills []skill.Skill, width int) string {
-	if len(skills) == 0 {
-		return "No skills discovered."
+// SkillGroup buckets one scope's skills together for /skills' grouped
+// display (issue #82).
+type SkillGroup struct {
+	Scope  skill.Scope
+	Skills []skill.Skill
+}
+
+// skillGroupOrder is the fixed scope order SkillGroups renders groups in —
+// most specific first: a project skill applies to this one repo, a user
+// skill to this whole machine, an extra-path skill to wherever the
+// skills.paths config happens to point. This is a display convention, not
+// a restatement of skill.Discover's own collision precedence (which scans
+// user, then extra, then project last — so a same-named skill only
+// resolves project-wins-over-the-rest, and says nothing about user vs.
+// extra).
+var skillGroupOrder = []skill.Scope{skill.ScopeProject, skill.ScopeUser, skill.ScopeExtra}
+
+// SkillGroups buckets skills by scope in skillGroupOrder, each group's
+// skills sorted by name (matching skill.Discover's overall sort, just
+// scoped down to the group). A scope with no discovered skills contributes
+// no group at all, so callers never need to special-case an empty one.
+func SkillGroups(skills []skill.Skill) []SkillGroup {
+	byScope := make(map[skill.Scope][]skill.Skill, len(skillGroupOrder))
+	for _, s := range skills {
+		byScope[s.Scope] = append(byScope[s.Scope], s)
 	}
 
-	const prefix, separator = "  ", " — "
-	overhead := len([]rune(prefix)) + len([]rune(separator))
-
-	labels := make([]string, len(skills))
-	for i, s := range skills {
-		labels[i] = fmt.Sprintf("%s (%s)", s.Name, s.Scope)
-	}
-
-	var labelWidth, descWidth int
-	if width > 0 {
-		labelWidth, descWidth = TableColumns(labels, width, overhead, MinDescWidth)
-	} else {
-		labelWidth = ColumnWidth(labels, 0)
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d skill(s) discovered:\n", len(skills))
-	for i, s := range skills {
-		label := labels[i]
-		desc := s.Description
-		if s.DisableModelInvocation {
-			desc += " [not model-invocable]"
+	groups := make([]SkillGroup, 0, len(skillGroupOrder))
+	for _, scope := range skillGroupOrder {
+		ss := byScope[scope]
+		if len(ss) == 0 {
+			continue
 		}
-		if width > 0 {
-			if l := len([]rune(label)); l > labelWidth {
-				label = TruncateWidth(label, labelWidth)
-			}
-			desc = TruncateWidth(desc, descWidth)
-		}
-		fmt.Fprintf(&b, "%s%-*s%s%s\n", prefix, labelWidth, label, separator, desc)
+		sort.Slice(ss, func(i, j int) bool { return ss[i].Name < ss[j].Name })
+		groups = append(groups, SkillGroup{Scope: scope, Skills: ss})
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return groups
 }

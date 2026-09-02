@@ -58,7 +58,7 @@ import (
 
 // line is one rendered row of the conversation scrollback.
 type line struct {
-	role string // "user" | "assistant" | "tool" | "system"
+	role string // "user" | "assistant" | "tool" | "system" | "info" | "raw"
 	text string
 }
 
@@ -646,7 +646,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, m.requestStatusRefresh()
 	case "/skills":
-		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills, m.width)})
+		m.lines = append(m.lines, line{role: "raw", text: renderSkillList(m.pal, m.skills, m.width)})
 		m.refreshViewport()
 		return m, nil
 	case "/compact":
@@ -884,6 +884,11 @@ func renderLine(p theme.Palette, l line) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Red)).Render(l.text)
 	case "info":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(p.Mauve)).Render(l.text)
+	case "raw":
+		// Already fully styled by the caller (e.g. renderSkillList), which
+		// needs per-segment styling renderLine's one-style-per-role
+		// switch can't express — rendered verbatim.
+		return l.text
 	default:
 		return l.text
 	}
