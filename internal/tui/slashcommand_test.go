@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
@@ -66,14 +69,14 @@ func TestSlashCandidatesHidesSkillShadowedByBuiltin(t *testing.T) {
 	}
 }
 
-func TestQuitHasNoDescriptionMatchingReadmesBareListing(t *testing.T) {
-	// The README lists "/quit" with no parenthetical description, unlike
-	// the other three built-ins — the popup must match that rather than
-	// inventing copy.
+func TestQuitHasADescription(t *testing.T) {
+	// issue #148: /quit previously had no description, unlike the other
+	// three built-ins. The popup (and README, kept in sync by hand) now
+	// give it one in the same tone as the rest.
 	got := slashCandidates(nil)
 	for _, c := range got {
-		if c.name == "quit" && c.description != "" {
-			t.Errorf("quit's description = %q, want empty (README lists it bare)", c.description)
+		if c.name == "quit" && c.description == "" {
+			t.Error("quit's description is empty, want a real description matching the other built-ins")
 		}
 	}
 }
@@ -84,6 +87,102 @@ func TestDescriptionSuffixEmptyOmitsDash(t *testing.T) {
 	}
 	if got := descriptionSuffix("reset the session"); got != " — reset the session" {
 		t.Errorf("descriptionSuffix(\"reset the session\") = %q, want \" — reset the session\"", got)
+	}
+}
+
+// TestRenderSlashPopupAlignsDescriptionColumn covers the AC that every
+// visible row's description starts at the same column regardless of name
+// length (issue #148). Stripped of ANSI styling, since a selected row and
+// an unselected/highlighted row build their text through a different
+// number of lipgloss.Render calls that would otherwise throw off a raw
+// byte-offset comparison despite being visually aligned.
+func TestRenderSlashPopupAlignsDescriptionColumn(t *testing.T) {
+	p := New(agent.Loop{}, config.Config{}, nil).pal
+	ss := slashState{
+		active: true,
+		matches: []slashMatch{
+			{slashCandidate: slashCandidate{name: "a", description: "short"}},
+			{slashCandidate: slashCandidate{name: "much-longer-name", description: "also has a description"}},
+		},
+	}
+
+	got := ansi.Strip(renderSlashPopup(p, ss, 80))
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("renderSlashPopup() = %d lines, want 2", len(lines))
+	}
+	// Rune index, not byte index: "›" (the selected row's leading marker)
+	// is a multi-byte rune, so a byte offset would report misalignment
+	// that isn't actually there on screen.
+	d0 := runeIndex(lines[0], "—")
+	d1 := runeIndex(lines[1], "—")
+	if d0 != d1 {
+		t.Errorf("description column starts at %d and %d, want the same column\n%q\n%q", d0, d1, lines[0], lines[1])
+	}
+}
+
+// runeIndex returns the rune (not byte) index of sep's first occurrence in
+// s, or -1 if absent.
+func runeIndex(s, sep string) int {
+	i := strings.Index(s, sep)
+	if i < 0 {
+		return -1
+	}
+	return len([]rune(s[:i]))
+}
+
+// TestRenderSlashPopupTruncatesLongDescription covers the AC that a
+// description too long for the popup's width is hard-truncated with a
+// trailing ellipsis rather than wrapping onto a second line.
+func TestRenderSlashPopupTruncatesLongDescription(t *testing.T) {
+	p := New(agent.Loop{}, config.Config{}, nil).pal
+	ss := slashState{
+		active: true,
+		matches: []slashMatch{
+			{slashCandidate: slashCandidate{name: "a", description: strings.Repeat("x", 200)}},
+		},
+	}
+
+	width := 40
+	got := ansi.Strip(renderSlashPopup(p, ss, width))
+	if strings.Contains(got, "\n") {
+		t.Errorf("renderSlashPopup() wrapped onto a second line, want one truncated row: %q", got)
+	}
+	if visible := len([]rune(got)); visible > width-popupBorderWidth {
+		t.Errorf("row width = %d runes, want <= %d (content width)", visible, width-popupBorderWidth)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("row = %q, want a hard-truncated ellipsis", got)
+	}
+}
+
+// TestRenderSlashPopupPreservesHighlightingForEqualLengthNames is a
+// regression guard for the AC that fuzzy-match highlighting is unchanged
+// for content the table layout doesn't need to touch: when every visible
+// name is already the same length, no padding is added, so a row's output
+// should be byte-identical to building it the pre-#148 way.
+func TestRenderSlashPopupPreservesHighlightingForEqualLengthNames(t *testing.T) {
+	p := New(agent.Loop{}, config.Config{}, nil).pal
+	ss := slashState{
+		active:   true,
+		selected: 1,
+		matches: []slashMatch{
+			{slashCandidate: slashCandidate{name: "abcd", description: "d1"}, matchedIndexes: []int{0, 2}},
+			{slashCandidate: slashCandidate{name: "wxyz", description: "d2"}},
+		},
+	}
+
+	got := renderSlashPopup(p, ss, 0)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("renderSlashPopup() = %d lines, want 2", len(lines))
+	}
+
+	plain := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Subtext))
+	highlight := lipgloss.NewStyle().Foreground(lipgloss.Color(p.Blue)).Bold(true)
+	want := plain.Render("  /") + renderMatchedName("abcd", []int{0, 2}, plain, highlight) + plain.Render(descriptionSuffix("d1"))
+	if lines[0] != want {
+		t.Errorf("renderSlashPopup() row 0 = %q, want %q", lines[0], want)
 	}
 }
 

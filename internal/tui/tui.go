@@ -646,7 +646,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, m.requestStatusRefresh()
 	case "/skills":
-		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills)})
+		m.lines = append(m.lines, line{role: "info", text: render.SkillList(m.skills, m.width)})
 		m.refreshViewport()
 		return m, nil
 	case "/compact":
