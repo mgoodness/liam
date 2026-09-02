@@ -132,7 +132,7 @@ func ResolveProjectTrust(store *TrustStore, root string, override *bool, prompt 
 	}
 
 	if prompt != nil {
-		trusted, err := prompt(fmt.Sprintf("liam: trust project-level skills in %s?", root))
+		trusted, err := prompt(fmt.Sprintf("Liam: trust project-level skills in %s?", root))
 		if err != nil {
 			return false, fmt.Errorf("skill: prompting for trust: %w", err)
 		}
