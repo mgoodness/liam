@@ -12,6 +12,9 @@ MCP, and Agent Skills through a small number of well-chosen seams.
 - **Interactive TUI or headless** — a Bubbletea shell with auto-detected
   light/dark (Catppuccin Latte/Frappe) theming, or `liam -p "<prompt>"` for
   scripting/CI.
+- **Startup banner** — session identity (name/version, provider paired with
+  model, working directory) shown as the transcript's first line at session
+  start and again after `/clear`.
 - **Click-drag transcript selection** — click and drag over the transcript
   to highlight text, copied to the system clipboard via OSC-52 on release.
 - **OpenRouter, auto-routing by default** — `openrouter/auto` picks the
