@@ -28,11 +28,11 @@ func TestBannerTextContainsIdentityFields(t *testing.T) {
 }
 
 // TestBannerTextBoldsLiam covers the spec's "Liam rendered bold" — the
-// rendered text carries lipgloss's bold SGR sequence somewhere around the
-// literal "Liam".
+// rendered text carries lipgloss's bold SGR sequence, in the palette's
+// accent color, somewhere around the literal "Liam".
 func TestBannerTextBoldsLiam(t *testing.T) {
 	got := bannerText(theme.Frappe, "v1.2.3", "openrouter", "openrouter/auto", "/cwd")
-	bold := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Frappe.Text)).Bold(true).Render("Liam")
+	bold := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Frappe.Mauve)).Bold(true).Render("Liam")
 	if !strings.Contains(got, bold) {
 		t.Errorf("bannerText(...) = %q, want it to contain the bold-rendered %q", got, bold)
 	}

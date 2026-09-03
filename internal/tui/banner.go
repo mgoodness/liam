@@ -57,13 +57,16 @@ func bannerLines(pal theme.Palette, version, providerName, model, cwd string) []
 	return []line{{role: "raw", text: text}, {role: "raw", text: ""}}
 }
 
-// bannerText renders the banner's three identity lines: "Liam" (bold) plus
-// version, provider paired with model, and cwd — CONTEXT.md's Banner
-// definition verbatim. cwd is display-collapsed to "~" (render.CollapseHome)
-// when it's inside the user's home directory; m.cwd itself stays the
-// original, uncollapsed path everywhere else it's used.
+// bannerText renders the banner's three identity lines: "Liam" (bold, in
+// the active theme.Palette's accent color — the same Mauve the statusLine's
+// now-removed "Liam" badge and render.SkillGroups' own headings already
+// use, so this isn't a new accent choice) plus version, provider paired
+// with model, and cwd — CONTEXT.md's Banner definition verbatim. cwd is
+// display-collapsed to "~" (render.CollapseHome) when it's inside the
+// user's home directory; m.cwd itself stays the original, uncollapsed path
+// everywhere else it's used.
 func bannerText(pal theme.Palette, version, providerName, model, cwd string) string {
-	name := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Text)).Bold(true).Render("Liam")
+	name := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Mauve)).Bold(true).Render("Liam")
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Subtext))
 	lines := []string{
 		name + " " + version,
