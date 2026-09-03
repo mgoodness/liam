@@ -24,10 +24,25 @@ import (
 
 // banner builds the startup banner's transcript lines from m's current
 // state — pal, version, the loop's Provider name, reqModel, and cwd — the
-// single call shared by Init()'s showBanner and submit()'s "/clear" case,
-// so neither has to repeat bannerLines' argument list by hand.
+// single call shared by showBannerOnce and submit()'s "/clear" case, so
+// neither has to repeat bannerLines' argument list by hand.
 func (m Model) banner() []line {
 	return bannerLines(m.pal, m.version, bannerProviderName(m.loop.Provider), m.reqModel, m.cwd)
+}
+
+// showBannerOnce prepends the startup banner to m.lines using m's current
+// theme.Palette, but only the first time it's called per session: in
+// theme.mode "auto", Init() races BackgroundColorMsg against
+// defaultBannerTimeout's fallback (see Init's doc comment in tui.go), and
+// bannerShown guards against both of them actually showing it. Pointer
+// receiver so the mutation lands on the caller's own m — every call site is
+// already inside Update, which discards nothing.
+func (m *Model) showBannerOnce() {
+	if m.bannerShown {
+		return
+	}
+	m.bannerShown = true
+	m.lines = append(m.banner(), m.lines...)
 }
 
 // bannerLines builds the startup banner's transcript lines: the identity

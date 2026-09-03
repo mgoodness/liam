@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
@@ -100,6 +101,7 @@ func TestInitShowsBannerAsFirstLine(t *testing.T) {
 		WithVersion("v9.9.9").
 		WithCwd("/some/project")
 	m.statusDebounce = 0 // avoid a real 300ms sleep when a batched cmd is invoked below
+	m.bannerTimeout = 0  // ditto — theme.mode defaults to "auto" here, so Init() batches bannerTimeoutCmd()
 
 	msg := m.Init()()
 	bm, ok := msg.(tea.BatchMsg)
@@ -127,6 +129,63 @@ func TestInitShowsBannerAsFirstLine(t *testing.T) {
 		if !strings.Contains(first, want) {
 			t.Errorf("m.lines[0] = %q, want it to contain %q", first, want)
 		}
+	}
+}
+
+// TestBackgroundColorMsgShowsBannerWithResolvedPalette covers the theme-
+// detection race fix: in theme.mode "auto", the banner must reflect
+// BackgroundColorMsg's resolved palette (light, here), not New()'s
+// dark-assumed placeholder — the bug this guards against would have baked
+// the banner's colors in before detection ever ran.
+func TestBackgroundColorMsgShowsBannerWithResolvedPalette(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil).WithCwd("/cwd")
+	if !m.pal.Dark {
+		t.Fatal("pal.Dark = false before any BackgroundColorMsg, want the dark-assumed default (test's own premise)")
+	}
+
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
+	mm := next.(Model)
+
+	if len(mm.lines) == 0 {
+		t.Fatal("m.lines is empty after BackgroundColorMsg")
+	}
+	want := bannerText(theme.Latte, mm.version, "", mm.reqModel, mm.cwd)
+	if !strings.Contains(mm.lines[0].text, want) {
+		t.Errorf("m.lines[0] = %q, want it to contain the light-palette banner text %q", mm.lines[0].text, want)
+	}
+}
+
+// TestBannerTimeoutFallbackShowsBannerOnce covers Init's fallback path (a
+// terminal that never answers the background-color query) and the
+// bannerShown guard: a fallback bannerMsg shows the banner using whatever
+// palette is current, and a BackgroundColorMsg arriving afterward updates
+// the palette without appending a second banner.
+func TestBannerTimeoutFallbackShowsBannerOnce(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+
+	next, _ := m.Update(bannerMsg{})
+	mm := next.(Model)
+	if len(mm.lines) == 0 {
+		t.Fatal("m.lines is empty after the fallback bannerMsg")
+	}
+
+	next, _ = mm.Update(tea.BackgroundColorMsg{Color: color.White})
+	mm = next.(Model)
+	if mm.pal.Dark {
+		// Not itself a bug — this documents the accepted tradeoff of a
+		// terminal slower than defaultBannerTimeout: the palette does
+		// still update for everything rendered after this point, only the
+		// already-shown banner keeps the fallback's colors.
+		t.Fatal("pal.Dark = true after a light BackgroundColorMsg, want it still updated even though the banner already showed")
+	}
+	count := 0
+	for _, l := range mm.lines {
+		if strings.Contains(l.text, "Liam") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("banner appears %d times after a late BackgroundColorMsg, want exactly 1 (bannerShown guard)", count)
 	}
 }
 

@@ -82,12 +82,17 @@ type turnDoneMsg struct {
 // of the streamed provider.Event sequence.
 type systemLineMsg struct{ text string }
 
-// bannerMsg carries the startup banner's lines (banner.go), built once by
-// Init()'s showBanner and prepended to m.lines by Update — Init has a value
-// receiver (see its own doc comment), so it cannot append to m.lines
-// directly; the banner has to travel through the same Cmd/Msg round trip as
-// every other Init-triggered side effect (statusTick, tea.RequestBackgroundColor).
-type bannerMsg struct{ lines []line }
+// bannerMsg signals that it's time to show the startup banner (banner.go,
+// issue #169) — Init has a value receiver (see its own doc comment), so it
+// cannot append to m.lines directly; showing the banner has to travel
+// through the same Cmd/Msg round trip as every other Init-triggered side
+// effect. It carries no data: the banner's content is built from m's
+// current state at the point bannerMsg is actually handled (see
+// showBannerOnce), not baked in when the triggering Cmd was constructed —
+// deliberately, so it reflects whatever theme.Palette turned out to be
+// correct rather than whatever New() guessed before auto-detection
+// resolved (see Init's doc comment).
+type bannerMsg struct{}
 
 // Model is the Bubbletea model driving liam's interactive shell.
 type Model struct {
@@ -144,6 +149,15 @@ type Model struct {
 	cwd string // set via WithCwd; statusLine's "cwd" field and the built-in renderer's git-info root
 
 	version string // set via WithVersion; shown in the startup banner's first line (issue #169)
+
+	// bannerShown guards the startup banner to append exactly once: in
+	// theme.mode "auto", Init() races background-color detection against
+	// bannerTimeout's fallback (see Init's doc comment), and only whichever
+	// resolves first should actually show it.
+	bannerShown bool
+	// bannerTimeout is defaultBannerTimeout in New(); tests may override it
+	// to avoid a real sleep, matching statusDebounce/indicatorTick.
+	bannerTimeout time.Duration
 
 	statusCfg      config.StatusLineConfig
 	statusTracker  *statusline.Tracker // tool-call count/duration, reset alongside sess.Clear() on /clear
@@ -243,6 +257,7 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 		statusDebounce: defaultStatusDebounce,
 
 		indicatorTick: defaultIndicatorTick,
+		bannerTimeout: defaultBannerTimeout,
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
@@ -285,22 +300,48 @@ func newTextarea() textarea.Model {
 	return ta
 }
 
+// defaultBannerTimeout bounds how long Init() waits for background-color
+// auto-detection to resolve before showing the startup banner anyway, using
+// whatever theme.Palette is current at that point (New()'s dark-assumed
+// default, absent a real response) — some terminals never answer the OSC
+// background-color query at all, and the banner's own acceptance criterion
+// ("shows the banner as the first transcript line, before any user input")
+// is unconditional, not contingent on detection succeeding. Comfortably
+// longer than any real terminal's typical (sub-100ms) response time, so
+// detection almost always wins the race and the fallback is rarely the one
+// that actually fires.
+var defaultBannerTimeout = 300 * time.Millisecond
+
 // Init requests the terminal's background color for theme auto-detection
-// (unless theme.mode already forces dark/light), kicks off statusLine's
+// (unless theme.mode already forces dark/light) and kicks off statusLine's
 // session-start refresh trigger — plus its optional periodic timer, when
-// config.StatusLineConfig.RefreshInterval is configured — and builds the
-// startup banner (issue #169). m.statusGen is already 1 by construction
-// (see New()), so this schedules that same generation's debounce tick
-// directly rather than going through requestStatusRefresh: Init has a value
-// receiver, and any mutation it made to its own m would be discarded rather
-// than persisted into the Model Bubbletea actually keeps — the banner's
-// content is built here (by which point every With* call site has already
-// applied) but only actually lands in m.lines once the resulting bannerMsg
-// reaches Update.
+// config.StatusLineConfig.RefreshInterval is configured. m.statusGen is
+// already 1 by construction (see New()), so this schedules that same
+// generation's debounce tick directly rather than going through
+// requestStatusRefresh: Init has a value receiver, and any mutation it made
+// to its own m would be discarded rather than persisted into the Model
+// Bubbletea actually keeps.
+//
+// The startup banner (issue #169) is shown once m.pal is settled, not
+// unconditionally here: building it from m.pal at Init() time would bake in
+// New()'s dark-assumed placeholder whenever theme.mode is "auto", almost
+// always beating background-color detection's real round trip back to
+// Update (showBanner's Cmd has no I/O and resolves essentially
+// immediately, long before a terminal replies to the OSC query) — the
+// banner would then be stuck showing the wrong palette even once
+// BackgroundColorMsg later corrects m.pal for everything rendered after it.
+// So when theme.mode is already fixed (no detection needed), the banner
+// shows immediately via showBanner(); otherwise it's raced between
+// BackgroundColorMsg (Update's own case, once detection resolves) and
+// defaultBannerTimeout's fallback (in case it never does) — whichever
+// happens first, guarded by showBannerOnce so it can only actually show
+// once.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.statusTick(m.statusGen), m.showBanner()}
+	cmds := []tea.Cmd{m.statusTick(m.statusGen)}
 	if m.themeMode != "dark" && m.themeMode != "light" {
-		cmds = append(cmds, tea.RequestBackgroundColor)
+		cmds = append(cmds, tea.RequestBackgroundColor, m.bannerTimeoutCmd())
+	} else {
+		cmds = append(cmds, m.showBanner())
 	}
 	if t := m.scheduleStatusTimer(); t != nil {
 		cmds = append(cmds, t)
@@ -309,11 +350,16 @@ func (m Model) Init() tea.Cmd {
 }
 
 // showBanner builds a Cmd that immediately (no I/O, no delay) resolves to a
-// bannerMsg carrying m.banner()'s output — see Init's doc comment for why
-// this can't just append to m.lines directly.
+// bannerMsg — used only when theme.mode is already fixed (dark/light), so
+// there's no detection round trip to race against.
 func (m Model) showBanner() tea.Cmd {
-	lines := m.banner()
-	return func() tea.Msg { return bannerMsg{lines: lines} }
+	return func() tea.Msg { return bannerMsg{} }
+}
+
+// bannerTimeoutCmd schedules a fallback bannerMsg, m.bannerTimeout from now
+// — see Init's doc comment for why theme.mode "auto" needs this at all.
+func (m Model) bannerTimeoutCmd() tea.Cmd {
+	return tea.Tick(m.bannerTimeout, func(time.Time) tea.Msg { return bannerMsg{} })
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -332,6 +378,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.pal = theme.Resolve(m.themeMode, msg.IsDark())
 		applyTextareaTheme(&m.input, m.pal)
+		// Detection resolved before defaultBannerTimeout's fallback fired —
+		// the common case (see Init's doc comment) — so this is where the
+		// startup banner actually gets its correct, final palette.
+		m.showBannerOnce()
 		m.refreshViewport()
 		return m, nil
 
@@ -395,7 +445,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForMsg(m.events)
 
 	case bannerMsg:
-		m.lines = append(msg.lines, m.lines...)
+		m.showBannerOnce()
 		m.refreshViewport()
 		return m, nil
 
