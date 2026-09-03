@@ -9,9 +9,6 @@ permissions:
 
 jobs:
   test:
-    # release-please's own PRs only ever touch CHANGELOG.md/version files —
-    # no source diff to test — so skip running the matrix against them.
-    if: ${{ !startsWith(github.head_ref, 'release-please--branches--') }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
