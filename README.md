@@ -1,4 +1,6 @@
-# liam
+# Liam
+
+<img src="assets/liam.svg" alt="Liam logo" width="120" align="right"/>
 
 A minimal coding-agent harness written in idiomatic Go, run as a terminal
 program — interactive TUI or headless. Strongly prefers the Go standard
@@ -29,7 +31,7 @@ MCP, and Agent Skills through a small number of well-chosen seams.
   context limit, plus live context/cost tracking in the status line.
 - **Customizable status line** — the built-in one, or point `statusLine` at
   your own external command.
-- **No built-in permission system** — liam runs tools with the harness
+- **No built-in permission system** — Liam runs tools with the harness
   process's own OS permissions; if you want gating (confirm-before-shell,
   deny-by-default, etc.), build it as a `beforeTool` Hook.
 
@@ -65,7 +67,7 @@ Flags:
 | `-skill`   | Force-activate a skill by name before the prompt (headless mode only, requires `-p`). |
 | `-version` | Print the version and exit.                                                      |
 
-Interactive-mode slash commands: `/quit` (exit liam), `/clear` (reset the session), `/compact` (condense the conversation history on demand), `/skills` (list discovered skills), `/<skill-name>` (force-activate a skill by name, bypassing model judgment). Typing `/` at the very start of the input opens a fuzzy-matched popup suggesting these (Up/Down to navigate, Tab to autocomplete — Enter still submits immediately, even with the popup open).
+Interactive-mode slash commands: `/quit` (exit Liam), `/clear` (reset the session), `/compact` (condense the conversation history on demand), `/skills` (list discovered skills), `/<skill-name>` (force-activate a skill by name, bypassing model judgment). Typing `/` at the very start of the input opens a fuzzy-matched popup suggesting these (Up/Down to navigate, Tab to autocomplete — Enter still submits immediately, even with the popup open).
 
 Click and drag over the transcript to select text (highlighted in reverse video); releasing the mouse copies the selected plain text to your system clipboard via OSC-52, no confirmation step. Scroll-wheel scrolling keeps working the same as always. OSC-52 isn't supported everywhere — notably, [herdrdev/herdr#2399](https://github.com/herdrdev/herdr/issues/2399) is an open bug where herdr silently drops it over SSH/WSL. If copying doesn't reach your clipboard, fall back to your terminal's own modifier-click selection bypass (Shift-click on most Linux terminals/Windows Terminal, Option-click on iTerm2/Terminal.app).
 
@@ -109,7 +111,7 @@ project scope (walked from the git root down) and user scope (`~/.agents/skills/
 
 ## Design notes
 
-liam ships no built-in permission/confirmation system, no sandbox, and no
+Liam ships no built-in permission/confirmation system, no sandbox, and no
 `--yolo` flag — tools run with your own OS permissions, same as running them
 yourself in a shell. See [`docs/adr/0004-no-built-in-permission-system.md`](docs/adr/0004-no-built-in-permission-system.md)
 for the reasoning, and [`CONTEXT.md`](CONTEXT.md) for the project's domain
