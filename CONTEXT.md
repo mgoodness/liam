@@ -61,7 +61,7 @@ Long-lived, provider-specific authentication material liam persists across sessi
 _Avoid_: API key (a Credential is specifically the persisted-OAuth-token case), token (bare — ambiguous with e.g. a tool-call ID).
 
 **Session**:
-One continuous conversation between the user and the harness, with its own history and active toolset, ending when the user exits or explicitly resets it. Not to be confused with a **Subagent**'s internal conversation, which has no user-driven lifecycle at all.
+One continuous conversation between the user and the harness, with its own history and active toolset, ending when the user exits or explicitly resets it. Ending doesn't mean losing it: a Session persists to disk and can be resumed. Not to be confused with a **Subagent**'s internal conversation, which has no user-driven lifecycle at all and is never persisted.
 _Avoid_: conversation, chat.
 
 **Subagent**:
