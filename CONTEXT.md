@@ -56,6 +56,10 @@ _Avoid_: plugin, integration.
 A backend that serves model completions. OpenRouter is the default provider; its auto-routing mode picks the underlying model per request.
 _Avoid_: model (a provider serves many models), backend.
 
+**Credential**:
+Long-lived, provider-specific authentication material liam persists across sessions — an OAuth refresh token, not a static secret — because the Provider it belongs to requires an interactive login rather than an exportable API key. Distinct from every other external-service key (Exa, OpenRouter), which liam reads from its own environment variable and never persists itself.
+_Avoid_: API key (a Credential is specifically the persisted-OAuth-token case), token (bare — ambiguous with e.g. a tool-call ID).
+
 **Session**:
 One continuous conversation between the user and the harness, with its own history and active toolset, ending when the user exits or explicitly resets it.
 _Avoid_: conversation, chat.
