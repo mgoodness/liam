@@ -30,11 +30,11 @@
 // plain-text span to the system clipboard via OSC-52
 // (tea.SetClipboard) — see docs/adr/0006-osc52-transcript-selection.md.
 //
-// The startup banner (issue #169, banner.go/logo.go/logo_gen.go) is the
-// transcript's very first entry, at session start and again after /clear:
-// liam's block-art logo, decoded at build time from assets/liam.png into
-// two fixed brand colors that never follow the active theme, beside three
-// lines of session identity text (name/version, provider · model, cwd).
+// The startup banner (issue #169, banner.go) is the transcript's very
+// first entry, at session start and again after /clear: a "Liam" wordmark
+// in liam's fixed brand color (never following the active theme) beside
+// three lines of session identity text (name/version, provider · model,
+// cwd).
 package tui
 
 import (

@@ -1,11 +1,17 @@
 package tui
 
 // This file implements liam's startup banner (issue #169, CONTEXT.md's
-// Banner): the block-art logo (logo.go/logo_gen.go) beside three lines of
-// session identity text, shown once as the transcript's first entry at
-// session start and again immediately after /clear. bannerLines is the
-// single shared construction helper backing both call sites (New()/Init()
-// in tui.go, submit()'s "/clear" case) so they can never drift apart.
+// Banner): a wordmark beside three lines of session identity text, shown
+// once as the transcript's first entry at session start and again
+// immediately after /clear. bannerLines is the single shared construction
+// helper backing both call sites (New()/Init() in tui.go, submit()'s
+// "/clear" case) so they can never drift apart.
+//
+// The spec's first choice was a block-art logo decoded from assets/
+// liam.png; that was tried (see this file's git history) and dropped after
+// visual review found it illegible at a compact size and noisy at a
+// legible one — the spec explicitly calls a plain bold wordmark instead of
+// art "an accepted outcome, not a defect" for exactly this case.
 
 import (
 	"strings"
@@ -16,9 +22,16 @@ import (
 	"github.com/mgoodness/liam/internal/theme"
 )
 
-// bannerLogoGap is the fixed column gap between the block-art logo and the
+// wordmarkColor is liam's fixed brand color (sampled from assets/liam.png),
+// used for the banner's wordmark regardless of the active theme.Palette —
+// the one deliberate exception to every other themed color in this
+// package, per the spec's "not remapped to the active Catppuccin theme
+// palette".
+const wordmarkColor = "#7D6249"
+
+// bannerWordmarkGap is the fixed column gap between the wordmark and the
 // identity text beside it.
-const bannerLogoGap = 2
+const bannerWordmarkGap = 2
 
 // banner builds the startup banner's transcript lines from m's current
 // state — pal, version, the loop's Provider name, reqModel, and cwd — the
@@ -28,17 +41,18 @@ func (m Model) banner() []line {
 	return bannerLines(m.pal, m.version, bannerProviderName(m.loop.Provider), m.reqModel, m.cwd)
 }
 
-// bannerLines builds the startup banner's transcript lines: the logo and
-// text joined side by side (vertically centered against whichever is
+// bannerLines builds the startup banner's transcript lines: the wordmark
+// and text joined side by side (vertically centered against whichever is
 // taller), followed by exactly one blank line — the spec's "a single blank
 // line separates the banner from whatever content follows it". Both are
 // "raw"-role lines (renderLine's convention for content the caller has
 // already fully styled), so they render verbatim rather than through
 // renderLine's own per-role styling.
 func bannerLines(pal theme.Palette, version, providerName, model, cwd string) []line {
-	logo := lipgloss.NewStyle().PaddingRight(bannerLogoGap).Render(renderLogo())
+	wordmark := lipgloss.NewStyle().PaddingRight(bannerWordmarkGap).
+		Foreground(lipgloss.Color(wordmarkColor)).Bold(true).Render("Liam")
 	text := bannerText(pal, version, providerName, model, cwd)
-	banner := lipgloss.JoinHorizontal(lipgloss.Center, logo, text)
+	banner := lipgloss.JoinHorizontal(lipgloss.Center, wordmark, text)
 	return []line{{role: "raw", text: banner}, {role: "raw", text: ""}}
 }
 

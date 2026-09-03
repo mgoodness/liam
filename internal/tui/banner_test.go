@@ -48,6 +48,21 @@ func TestBannerTextFixedColorsIgnoreTheme(t *testing.T) {
 	}
 }
 
+// TestBannerLinesWordmarkIsBoldAndFixedColor covers the fallback wordmark
+// (issue #169's PR: the block-art logo was tried and dropped as illegible/
+// noisy) — it must render bold, and in liam's fixed brand color regardless
+// of the active theme.Palette.
+func TestBannerLinesWordmarkIsBoldAndFixedColor(t *testing.T) {
+	wordmark := lipgloss.NewStyle().Foreground(lipgloss.Color(wordmarkColor)).Bold(true).Render("Liam")
+
+	for _, pal := range []theme.Palette{theme.Frappe, theme.Latte} {
+		lines := bannerLines(pal, "v1", "p", "m", "/cwd")
+		if len(lines) == 0 || !strings.Contains(lines[0].text, wordmark) {
+			t.Errorf("bannerLines(%v, ...)[0] = %q, want it to contain the bold, fixed-color wordmark %q", pal, lines[0].text, wordmark)
+		}
+	}
+}
+
 // TestBannerLinesEndsWithBlankSeparator covers "a single blank line
 // separates the banner from whatever content follows it".
 func TestBannerLinesEndsWithBlankSeparator(t *testing.T) {
