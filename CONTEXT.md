@@ -40,6 +40,10 @@ _Avoid_: scrollback, conversation view, history (bare — could be confused with
 A transient, fuzzy-matched suggestion list that opens as the user types a specific trigger character, floats as a bordered dialog above the input while active, and closes on selection, Esc, or the trigger token breaking — liam has two: the `@`-mention (file reference) popup and the `/`-command (Slash command) popup. Distinct from the status block, which is always-present rather than transient.
 _Avoid_: modal (describes its rendering, not the concept — a popup floats as a dialog, but "modal" alone doesn't capture the autocomplete/suggestion behavior), dropdown, autocomplete (bare — describes what it does, not the harness-level concept).
 
+**Banner**:
+The three-line identity block (name/version, provider paired with model, working directory) shown beside liam's logo as the very first entry in the transcript at the start of every session, including after `/clear` — scrolls away with the rest of the transcript like any other line, never pinned to the screen.
+_Avoid_: header, splash screen, welcome message.
+
 **Plugin**:
 An installable, distributable bundle (per the agent-plugins.org spec) that extends the harness itself by registering new tools, skills, hooks, or MCP servers together as one unit.
 _Avoid_: skill, extension, addon.
