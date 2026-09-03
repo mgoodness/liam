@@ -46,7 +46,8 @@ func drainStatus(t *testing.T, m Model, cmd tea.Cmd) Model {
 }
 
 func TestNewThreadsStatusLineConfig(t *testing.T) {
-	cfg := config.Config{StatusLine: config.StatusLineConfig{Command: "my-status-command", RefreshInterval: 2000}}
+	interval := 2000
+	cfg := config.Config{StatusLine: config.StatusLineConfig{Command: "my-status-command", RefreshInterval: &interval}}
 	m := New(agent.Loop{}, cfg, nil)
 	if m.statusCfg != cfg.StatusLine {
 		t.Errorf("statusCfg = %+v, want %+v", m.statusCfg, cfg.StatusLine)
@@ -264,6 +265,50 @@ func TestStatusLineRefreshEndToEndFailingCommandWarnsInTranscript(t *testing.T) 
 	}
 	if !found {
 		t.Errorf("lines = %+v, want a system line mentioning the command's stderr", final.lines)
+	}
+}
+
+// TestInitBatchesTimerAlongsideSessionStartRefreshWhenUnconfigured covers
+// issue #146 through Init()'s public Cmd batch (matching
+// TestNewAppliesThemeModeOverrideWithoutDetection's own approach), rather
+// than inspecting the unexported scheduleStatusTimer directly: with no
+// statusLine.refreshInterval configured, the periodic timer must still be
+// batched alongside the session-start refresh trigger and the startup
+// banner (it used to default to disabled), so the status line keeps
+// updating during a long-running operation with no other trigger, without
+// displacing the existing event-driven triggers. themeMode is fixed to
+// "dark" so the batch's size is deterministic (no background-color
+// detection request); none of the batched cmds are invoked, since the
+// timer one would otherwise block for a real
+// statusline.DefaultRefreshInterval.
+func TestInitBatchesTimerAlongsideSessionStartRefreshWhenUnconfigured(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{}, nil)
+	m.themeMode = "dark"
+
+	batch, ok := m.Init()().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Init() = %#v, want a tea.BatchMsg", m.Init()())
+	}
+	if want := 3; len(batch) != want {
+		t.Errorf("Init() batch = %d cmds, want %d (session-start refresh, banner, default timer)", len(batch), want)
+	}
+}
+
+// TestInitOmitsTimerWhenExplicitlyDisabled covers the flip side, again
+// through Init()'s public batch: an explicit refreshInterval of 0 must
+// still disable the timer, exactly as it did before the default changed.
+func TestInitOmitsTimerWhenExplicitlyDisabled(t *testing.T) {
+	zero := 0
+	cfg := config.Config{StatusLine: config.StatusLineConfig{RefreshInterval: &zero}}
+	m := New(agent.Loop{}, cfg, nil)
+	m.themeMode = "dark"
+
+	batch, ok := m.Init()().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Init() = %#v, want a tea.BatchMsg", m.Init()())
+	}
+	if want := 2; len(batch) != want {
+		t.Errorf("Init() batch = %d cmds, want %d (session-start refresh, banner — no timer)", len(batch), want)
 	}
 }
 

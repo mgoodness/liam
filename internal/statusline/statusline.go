@@ -43,14 +43,25 @@ const maxRows = 20
 // configured positive value.
 const MinRefreshInterval = time.Second
 
+// DefaultRefreshInterval is the periodic timer refresh interval used when
+// StatusLineConfig.RefreshInterval is left unset, so the status block still
+// updates at least once per second during a long-running operation with no
+// other refresh trigger (issue #146), without requiring any config.
+const DefaultRefreshInterval = time.Second
+
 // RefreshInterval converts a StatusLineConfig.RefreshInterval millisecond
-// value into a time.Duration: ms <= 0 means "no timer configured" (0
-// returned); any positive value below MinRefreshInterval is raised to it.
-func RefreshInterval(ms int) time.Duration {
-	if ms <= 0 {
+// pointer into a time.Duration: nil (unset) resolves to
+// DefaultRefreshInterval; an explicit value <= 0 disables the timer (0
+// returned); any other positive value below MinRefreshInterval is raised to
+// it.
+func RefreshInterval(ms *int) time.Duration {
+	if ms == nil {
+		return DefaultRefreshInterval
+	}
+	if *ms <= 0 {
 		return 0
 	}
-	d := time.Duration(ms) * time.Millisecond
+	d := time.Duration(*ms) * time.Millisecond
 	if d < MinRefreshInterval {
 		return MinRefreshInterval
 	}

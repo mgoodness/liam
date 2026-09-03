@@ -113,7 +113,11 @@ func TestBannerProviderNameReportsProviderName(t *testing.T) {
 // up with the banner as m.lines[0] before any user input.
 func TestInitShowsBannerAsFirstLine(t *testing.T) {
 	fp := &multiCallProvider{}
-	m := New(agent.Loop{Provider: fp}, config.Config{Provider: config.ProviderConfig{Model: "openrouter/auto"}}, nil).
+	noTimer := 0
+	m := New(agent.Loop{Provider: fp}, config.Config{
+		Provider:   config.ProviderConfig{Model: "openrouter/auto"},
+		StatusLine: config.StatusLineConfig{RefreshInterval: &noTimer}, // avoid a real 1s sleep when a batched cmd is invoked below
+	}, nil).
 		WithVersion("v9.9.9").
 		WithCwd("/some/project")
 	m.statusDebounce = 0 // avoid a real 300ms sleep when a batched cmd is invoked below

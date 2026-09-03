@@ -17,20 +17,26 @@ import (
 )
 
 func TestRefreshIntervalFloorsAndDisables(t *testing.T) {
+	ms := func(v int) *int { return &v }
+
 	cases := []struct {
-		ms   int
+		name string
+		ms   *int
 		want int // milliseconds
 	}{
-		{ms: 0, want: 0},
-		{ms: -5, want: 0},
-		{ms: 500, want: 1000},
-		{ms: 1000, want: 1000},
-		{ms: 2500, want: 2500},
+		{name: "unconfigured", ms: nil, want: 1000},
+		{name: "explicit zero disables", ms: ms(0), want: 0},
+		{name: "explicit negative disables", ms: ms(-5), want: 0},
+		{name: "below floor raised to floor", ms: ms(500), want: 1000},
+		{name: "at floor", ms: ms(1000), want: 1000},
+		{name: "explicit value takes precedence over default", ms: ms(2500), want: 2500},
 	}
 	for _, tc := range cases {
-		if got := RefreshInterval(tc.ms).Milliseconds(); got != int64(tc.want) {
-			t.Errorf("RefreshInterval(%d) = %dms, want %dms", tc.ms, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RefreshInterval(tc.ms).Milliseconds(); got != int64(tc.want) {
+				t.Errorf("RefreshInterval(%v) = %dms, want %dms", tc.ms, got, tc.want)
+			}
+		})
 	}
 }
 
