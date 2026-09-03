@@ -41,7 +41,7 @@ A transient, fuzzy-matched suggestion list that opens as the user types a specif
 _Avoid_: modal (describes its rendering, not the concept — a popup floats as a dialog, but "modal" alone doesn't capture the autocomplete/suggestion behavior), dropdown, autocomplete (bare — describes what it does, not the harness-level concept).
 
 **Banner**:
-The three-line identity block (name/version, provider paired with model, working directory) shown beside liam's logo as the very first entry in the transcript at the start of every session, including after `/clear` — scrolls away with the rest of the transcript like any other line, never pinned to the screen.
+The three-line identity block (name/version, provider paired with model, working directory) shown as the very first entry in the transcript at the start of every session, including after `/clear` — scrolls away with the rest of the transcript like any other line, never pinned to the screen. No logo or wordmark accompanies it; a few visual treatments were tried and dropped as not worth the complexity.
 _Avoid_: header, splash screen, welcome message.
 
 **Plugin**:

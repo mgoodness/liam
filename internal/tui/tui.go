@@ -31,10 +31,8 @@
 // (tea.SetClipboard) — see docs/adr/0006-osc52-transcript-selection.md.
 //
 // The startup banner (issue #169, banner.go) is the transcript's very
-// first entry, at session start and again after /clear: a "Liam" wordmark
-// in liam's fixed brand color (never following the active theme) beside
-// three lines of session identity text (name/version, provider · model,
-// cwd).
+// first entry, at session start and again after /clear: three lines of
+// session identity text (name/version, provider · model, cwd).
 package tui
 
 import (
