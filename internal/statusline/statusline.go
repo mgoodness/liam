@@ -20,6 +20,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/shellrun"
 	"github.com/mgoodness/liam/internal/theme"
@@ -272,7 +273,9 @@ func defaultRows(in Input, pal theme.Palette) []string {
 		segs = append(segs, in.Model)
 	}
 	if in.Cwd != "" {
-		segs = append(segs, in.Cwd)
+		// Display-only: in.Cwd itself (the JSON payload, gitInfo's lookup
+		// root) stays the original, uncollapsed path.
+		segs = append(segs, render.CollapseHome(in.Cwd))
 	}
 	if in.Git != nil {
 		branch := "🌿 " + in.Git.Branch

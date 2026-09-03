@@ -178,6 +178,21 @@ func TestRenderDefaultProducesIdentityAndMetricsRows(t *testing.T) {
 	}
 }
 
+// TestRenderDefaultCollapsesCwdToHome covers display-only "~" collapsing
+// (render.CollapseHome): the identity row shows "~/project", never the raw
+// home-directory path.
+func TestRenderDefaultCollapsesCwdToHome(t *testing.T) {
+	t.Setenv("HOME", "/home/liam")
+
+	rows := Render(context.Background(), "", Input{Model: "openrouter/auto", Cwd: "/home/liam/project"}, 200, 50, theme.Frappe, nil)
+	if !strings.Contains(rows[0], "~/project") {
+		t.Errorf("identity row = %q, want it to contain %q", rows[0], "~/project")
+	}
+	if strings.Contains(rows[0], "/home/liam/project") {
+		t.Errorf("identity row = %q, want the raw home-directory path collapsed away", rows[0])
+	}
+}
+
 func TestRenderCommandReceivesInputAsStdinJSON(t *testing.T) {
 	in := Input{SessionID: "abc", Cwd: "/proj", Model: "openrouter/auto", ToolCalls: 3, CostUSD: 0.5}
 	want, err := json.Marshal(in)

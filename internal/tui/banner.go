@@ -19,6 +19,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/mgoodness/liam/internal/provider"
+	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/theme"
 )
 
@@ -58,14 +59,16 @@ func bannerLines(pal theme.Palette, version, providerName, model, cwd string) []
 
 // bannerText renders the banner's three identity lines: "Liam" (bold) plus
 // version, provider paired with model, and cwd — CONTEXT.md's Banner
-// definition verbatim.
+// definition verbatim. cwd is display-collapsed to "~" (render.CollapseHome)
+// when it's inside the user's home directory; m.cwd itself stays the
+// original, uncollapsed path everywhere else it's used.
 func bannerText(pal theme.Palette, version, providerName, model, cwd string) string {
 	name := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Text)).Bold(true).Render("Liam")
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Subtext))
 	lines := []string{
 		name + " " + version,
 		dim.Render(providerName + " · " + model),
-		dim.Render(cwd),
+		dim.Render(render.CollapseHome(cwd)),
 	}
 	return strings.Join(lines, "\n")
 }

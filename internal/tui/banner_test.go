@@ -18,6 +18,7 @@ import (
 // definition: "Liam" + version, provider paired with model, and cwd all
 // appear in the rendered text.
 func TestBannerTextContainsIdentityFields(t *testing.T) {
+	t.Setenv("HOME", "/nonexistent-home") // guard against render.CollapseHome touching cwd below
 	got := bannerText(theme.Frappe, "v1.2.3", "openrouter", "openrouter/auto", "/home/user/project")
 	for _, want := range []string{"Liam", "v1.2.3", "openrouter", "openrouter/auto", "/home/user/project", "·"} {
 		if !strings.Contains(got, want) {
@@ -34,6 +35,21 @@ func TestBannerTextBoldsLiam(t *testing.T) {
 	bold := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Frappe.Text)).Bold(true).Render("Liam")
 	if !strings.Contains(got, bold) {
 		t.Errorf("bannerText(...) = %q, want it to contain the bold-rendered %q", got, bold)
+	}
+}
+
+// TestBannerTextCollapsesCwdToHome covers display-only "~" collapsing
+// (render.CollapseHome): the cwd line shows "~/project", never the raw
+// home-directory path.
+func TestBannerTextCollapsesCwdToHome(t *testing.T) {
+	t.Setenv("HOME", "/home/liam")
+
+	got := bannerText(theme.Frappe, "v1", "p", "m", "/home/liam/project")
+	if !strings.Contains(got, "~/project") {
+		t.Errorf("bannerText(...) = %q, want it to contain %q", got, "~/project")
+	}
+	if strings.Contains(got, "/home/liam/project") {
+		t.Errorf("bannerText(...) = %q, want the raw home-directory path collapsed away", got)
 	}
 }
 
