@@ -19,7 +19,7 @@ import (
 // appear in the rendered text.
 func TestBannerTextContainsIdentityFields(t *testing.T) {
 	t.Setenv("HOME", "/nonexistent-home") // guard against render.CollapseHome touching cwd below
-	got := bannerText(theme.Frappe, "v1.2.3", "openrouter", "openrouter/auto", "/home/user/project")
+	got := bannerText(bannerInfo{pal: theme.Frappe, version: "v1.2.3", providerName: "openrouter", model: "openrouter/auto", cwd: "/home/user/project"})
 	for _, want := range []string{"Liam", "v1.2.3", "openrouter", "openrouter/auto", "/home/user/project", "·"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("bannerText(...) = %q, want it to contain %q", got, want)
@@ -31,7 +31,7 @@ func TestBannerTextContainsIdentityFields(t *testing.T) {
 // rendered text carries lipgloss's bold SGR sequence, in the palette's
 // accent color, somewhere around the literal "Liam".
 func TestBannerTextBoldsLiam(t *testing.T) {
-	got := bannerText(theme.Frappe, "v1.2.3", "openrouter", "openrouter/auto", "/cwd")
+	got := bannerText(bannerInfo{pal: theme.Frappe, version: "v1.2.3", providerName: "openrouter", model: "openrouter/auto", cwd: "/cwd"})
 	bold := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Frappe.Mauve)).Bold(true).Render("Liam")
 	if !strings.Contains(got, bold) {
 		t.Errorf("bannerText(...) = %q, want it to contain the bold-rendered %q", got, bold)
@@ -44,7 +44,7 @@ func TestBannerTextBoldsLiam(t *testing.T) {
 func TestBannerTextCollapsesCwdToHome(t *testing.T) {
 	t.Setenv("HOME", "/home/liam")
 
-	got := bannerText(theme.Frappe, "v1", "p", "m", "/home/liam/project")
+	got := bannerText(bannerInfo{pal: theme.Frappe, version: "v1", providerName: "p", model: "m", cwd: "/home/liam/project"})
 	if !strings.Contains(got, "~/project") {
 		t.Errorf("bannerText(...) = %q, want it to contain %q", got, "~/project")
 	}
@@ -58,8 +58,8 @@ func TestBannerTextCollapsesCwdToHome(t *testing.T) {
 // still follows the active theme.Palette, so Frappe and Latte must render
 // differently.
 func TestBannerTextFixedColorsIgnoreTheme(t *testing.T) {
-	frappe := bannerText(theme.Frappe, "v1", "p", "m", "/cwd")
-	latte := bannerText(theme.Latte, "v1", "p", "m", "/cwd")
+	frappe := bannerText(bannerInfo{pal: theme.Frappe, version: "v1", providerName: "p", model: "m", cwd: "/cwd"})
+	latte := bannerText(bannerInfo{pal: theme.Latte, version: "v1", providerName: "p", model: "m", cwd: "/cwd"})
 	if frappe == latte {
 		t.Error("bannerText rendered identically for Frappe and Latte, want the identity text to follow the active palette")
 	}
@@ -68,7 +68,7 @@ func TestBannerTextFixedColorsIgnoreTheme(t *testing.T) {
 // TestBannerLinesEndsWithBlankSeparator covers "a single blank line
 // separates the banner from whatever content follows it".
 func TestBannerLinesEndsWithBlankSeparator(t *testing.T) {
-	lines := bannerLines(theme.Frappe, "v1", "p", "m", "/cwd")
+	lines := bannerLines(bannerInfo{pal: theme.Frappe, version: "v1", providerName: "p", model: "m", cwd: "/cwd"})
 	if len(lines) < 2 {
 		t.Fatalf("bannerLines(...) returned %d lines, want at least 2 (banner + blank separator)", len(lines))
 	}
@@ -83,7 +83,7 @@ func TestBannerLinesEndsWithBlankSeparator(t *testing.T) {
 // it must use the "raw" role to render verbatim rather than being
 // re-styled by renderLine's per-role switch.
 func TestBannerLinesAreRawRole(t *testing.T) {
-	for _, l := range bannerLines(theme.Frappe, "v1", "p", "m", "/cwd") {
+	for _, l := range bannerLines(bannerInfo{pal: theme.Frappe, version: "v1", providerName: "p", model: "m", cwd: "/cwd"}) {
 		if l.role != "raw" {
 			t.Errorf("bannerLines() line role = %q, want %q", l.role, "raw")
 		}
@@ -165,7 +165,7 @@ func TestBackgroundColorMsgShowsBannerWithResolvedPalette(t *testing.T) {
 	if len(mm.lines) == 0 {
 		t.Fatal("m.lines is empty after BackgroundColorMsg")
 	}
-	want := bannerText(theme.Latte, mm.version, "", mm.reqModel, mm.cwd)
+	want := bannerText(bannerInfo{pal: theme.Latte, version: mm.version, providerName: "", model: mm.reqModel, cwd: mm.cwd})
 	if !strings.Contains(mm.lines[0].text, want) {
 		t.Errorf("m.lines[0] = %q, want it to contain the light-palette banner text %q", mm.lines[0].text, want)
 	}
@@ -213,7 +213,7 @@ func TestSubmitOrdinaryTurnDoesNotRepeatBanner(t *testing.T) {
 		{provider.TextDeltaEvent{Text: "hi"}, provider.DoneEvent{FinishReason: "stop"}},
 	}}
 	m := New(agent.Loop{Provider: fp}, config.Config{}, nil)
-	m.lines = bannerLines(m.pal, "v1", "p", "m", "/cwd")
+	m.lines = bannerLines(bannerInfo{pal: m.pal, version: "v1", providerName: "p", model: "m", cwd: "/cwd"})
 	m.input.SetValue("hello")
 
 	next, cmd := m.submit()

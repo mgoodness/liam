@@ -23,12 +23,29 @@ import (
 	"github.com/mgoodness/liam/internal/theme"
 )
 
+// bannerInfo bundles the identity fields bannerLines and bannerText both
+// need — pal, version, providerName, model, and cwd travel together as a
+// single unit because every caller assembles all five at once from m's
+// current state.
+type bannerInfo struct {
+	pal          theme.Palette
+	version      string
+	providerName string
+	model        string
+	cwd          string
+}
+
 // banner builds the startup banner's transcript lines from m's current
-// state — pal, version, the loop's Provider name, reqModel, and cwd — the
-// single call shared by showBannerOnce and submit()'s "/clear" case, so
-// neither has to repeat bannerLines' argument list by hand.
+// state — the single call shared by showBannerOnce and submit()'s "/clear"
+// case, so neither has to repeat bannerLines' argument list by hand.
 func (m Model) banner() []line {
-	return bannerLines(m.pal, m.version, bannerProviderName(m.loop.Provider), m.reqModel, m.cwd)
+	return bannerLines(bannerInfo{
+		pal:          m.pal,
+		version:      m.version,
+		providerName: bannerProviderName(m.loop.Provider),
+		model:        m.reqModel,
+		cwd:          m.cwd,
+	})
 }
 
 // showBannerOnce prepends the startup banner to m.lines using m's current
@@ -52,8 +69,8 @@ func (m *Model) showBannerOnce() {
 // "raw"-role lines (renderLine's convention for content the caller has
 // already fully styled), so they render verbatim rather than through
 // renderLine's own per-role styling.
-func bannerLines(pal theme.Palette, version, providerName, model, cwd string) []line {
-	text := bannerText(pal, version, providerName, model, cwd)
+func bannerLines(info bannerInfo) []line {
+	text := bannerText(info)
 	return []line{{role: "raw", text: text}, {role: "raw", text: ""}}
 }
 
@@ -65,13 +82,13 @@ func bannerLines(pal theme.Palette, version, providerName, model, cwd string) []
 // display-collapsed to "~" (render.CollapseHome) when it's inside the
 // user's home directory; m.cwd itself stays the original, uncollapsed path
 // everywhere else it's used.
-func bannerText(pal theme.Palette, version, providerName, model, cwd string) string {
-	name := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Mauve)).Bold(true).Render("Liam")
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Subtext))
+func bannerText(info bannerInfo) string {
+	name := lipgloss.NewStyle().Foreground(lipgloss.Color(info.pal.Mauve)).Bold(true).Render("Liam")
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(info.pal.Subtext))
 	lines := []string{
-		name + " " + version,
-		dim.Render(providerName + " · " + model),
-		dim.Render(render.CollapseHome(cwd)),
+		name + " " + info.version,
+		dim.Render(info.providerName + " · " + info.model),
+		dim.Render(render.CollapseHome(info.cwd)),
 	}
 	return strings.Join(lines, "\n")
 }
