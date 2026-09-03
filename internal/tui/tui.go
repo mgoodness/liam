@@ -29,6 +29,12 @@
 // spanned text in reverse video, and releasing the button copies the
 // plain-text span to the system clipboard via OSC-52
 // (tea.SetClipboard) — see docs/adr/0006-osc52-transcript-selection.md.
+//
+// The startup banner (issue #169, banner.go/logo.go/logo_gen.go) is the
+// transcript's very first entry, at session start and again after /clear:
+// liam's block-art logo, decoded at build time from assets/liam.png into
+// two fixed brand colors that never follow the active theme, beside three
+// lines of session identity text (name/version, provider · model, cwd).
 package tui
 
 import (
@@ -77,6 +83,13 @@ type turnDoneMsg struct {
 // notice — e.g. an MCP load timeout or per-server error — that isn't part
 // of the streamed provider.Event sequence.
 type systemLineMsg struct{ text string }
+
+// bannerMsg carries the startup banner's lines (banner.go), built once by
+// Init()'s showBanner and prepended to m.lines by Update — Init has a value
+// receiver (see its own doc comment), so it cannot append to m.lines
+// directly; the banner has to travel through the same Cmd/Msg round trip as
+// every other Init-triggered side effect (statusTick, tea.RequestBackgroundColor).
+type bannerMsg struct{ lines []line }
 
 // Model is the Bubbletea model driving liam's interactive shell.
 type Model struct {
@@ -132,6 +145,8 @@ type Model struct {
 
 	cwd string // set via WithCwd; statusLine's "cwd" field and the built-in renderer's git-info root
 
+	version string // set via WithVersion; shown in the startup banner's first line (issue #169)
+
 	statusCfg      config.StatusLineConfig
 	statusTracker  *statusline.Tracker // tool-call count/duration, reset alongside sess.Clear() on /clear
 	statusLines    []string            // the status block's current rows, refreshed asynchronously
@@ -176,6 +191,17 @@ func (m Model) WithFindSearcher(searcher tool.FindSearcher) Model {
 // renderer simply omits the cwd segment and git info then.
 func (m Model) WithCwd(cwd string) Model {
 	m.cwd = cwd
+	return m
+}
+
+// WithVersion attaches version — the running build's version string,
+// resolved once by cmd/liam/main.go's versionString() (ldflags, falling
+// back to debug.ReadBuildInfo) and reused here rather than re-resolved —
+// shown in the startup banner's first line (issue #169). A zero-value Model
+// (no WithVersion call) leaves it "", matching every existing New(...) call
+// site: the banner simply shows "Liam" with no trailing version.
+func (m Model) WithVersion(version string) Model {
+	m.version = version
 	return m
 }
 
@@ -262,16 +288,19 @@ func newTextarea() textarea.Model {
 }
 
 // Init requests the terminal's background color for theme auto-detection
-// (unless theme.mode already forces dark/light), and kicks off statusLine's
+// (unless theme.mode already forces dark/light), kicks off statusLine's
 // session-start refresh trigger — plus its optional periodic timer, when
-// config.StatusLineConfig.RefreshInterval is configured. m.statusGen is
-// already 1 by construction (see New()), so this schedules that same
-// generation's debounce tick directly rather than going through
-// requestStatusRefresh: Init has a value receiver, and any mutation it
-// made to its own m would be discarded rather than persisted into the
-// Model Bubbletea actually keeps.
+// config.StatusLineConfig.RefreshInterval is configured — and builds the
+// startup banner (issue #169). m.statusGen is already 1 by construction
+// (see New()), so this schedules that same generation's debounce tick
+// directly rather than going through requestStatusRefresh: Init has a value
+// receiver, and any mutation it made to its own m would be discarded rather
+// than persisted into the Model Bubbletea actually keeps — the banner's
+// content is built here (by which point every With* call site has already
+// applied) but only actually lands in m.lines once the resulting bannerMsg
+// reaches Update.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.statusTick(m.statusGen)}
+	cmds := []tea.Cmd{m.statusTick(m.statusGen), m.showBanner()}
 	if m.themeMode != "dark" && m.themeMode != "light" {
 		cmds = append(cmds, tea.RequestBackgroundColor)
 	}
@@ -279,6 +308,14 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, t)
 	}
 	return tea.Batch(cmds...)
+}
+
+// showBanner builds a Cmd that immediately (no I/O, no delay) resolves to a
+// bannerMsg carrying m.banner()'s output — see Init's doc comment for why
+// this can't just append to m.lines directly.
+func (m Model) showBanner() tea.Cmd {
+	lines := m.banner()
+	return func() tea.Msg { return bannerMsg{lines: lines} }
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -358,6 +395,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lines = append(m.lines, line{role: "system", text: msg.text})
 		m.refreshViewport()
 		return m, waitForMsg(m.events)
+
+	case bannerMsg:
+		m.lines = append(msg.lines, m.lines...)
+		m.refreshViewport()
+		return m, nil
 
 	case statusRefreshMsg:
 		if msg.gen != m.statusGen {
@@ -643,7 +685,11 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		m.sess.Clear()
 		startSession(m.loop, m.sess)
 		m.statusTracker.Reset()
-		m.lines = nil
+		// The banner (issue #169) reappears as the freshly-cleared
+		// transcript's new first line, built synchronously here rather than
+		// via showBanner's Cmd/Msg round trip — submit() already has a
+		// fully up-to-date m to build it from directly.
+		m.lines = m.banner()
 		m.streaming.Reset()
 		m.sel = selectionState{}
 		m.refreshViewport()
