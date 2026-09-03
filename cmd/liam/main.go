@@ -155,6 +155,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			systemPrompt: systemPrompt,
 			findSearcher: findSearcher,
 			cwd:          cwd,
+			version:      versionString(),
 		}
 		return runInteractive(deps, stdin, stdout, stderr)
 	}
@@ -257,6 +258,7 @@ type interactiveDeps struct {
 	systemPrompt string // issue #95's identity preamble + issue #56's discovered AGENTS.md/LIAM.md instructions (baseSystemPrompt)
 	findSearcher tool.FindSearcher
 	cwd          string // issue #60's statusLine "cwd" field and built-in git info
+	version      string // versionString()'s resolved build version, threaded into the startup banner (issue #169) via tui.Model.WithVersion
 }
 
 // runInteractive launches liam's Bubbletea TUI. deps.loop.Hooks' sessionEnd,
@@ -273,13 +275,17 @@ type interactiveDeps struct {
 // #58) via tui.Model.WithFindSearcher — the same searcher findGrepSearchers
 // picked for the find/grep tools themselves. deps.cwd feeds statusLine's
 // (issue #60) "cwd" field and the built-in renderer's git branch/dirty
-// lookup via tui.Model.WithCwd.
+// lookup via tui.Model.WithCwd. deps.version (versionString()'s already-
+// resolved build version) feeds the startup banner's first line (issue
+// #169) via tui.Model.WithVersion, rather than re-resolving it inside the
+// tui package.
 func runInteractive(deps interactiveDeps, stdin io.Reader, stdout, stderr io.Writer) int {
 	m := tui.New(deps.loop, deps.cfg, deps.skills).
 		WithMCPLoader(deps.mcpLoader).
 		WithSystemPrompt(deps.systemPrompt).
 		WithFindSearcher(deps.findSearcher).
-		WithCwd(deps.cwd)
+		WithCwd(deps.cwd).
+		WithVersion(deps.version)
 	if deps.loop.Hooks != nil {
 		defer deps.loop.Hooks.SessionEnd(context.Background())
 	}

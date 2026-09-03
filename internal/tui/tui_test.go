@@ -234,8 +234,10 @@ func TestSubmitSlashClearResetsSessionAndLines(t *testing.T) {
 	if _, ok := cmd().(statusRefreshMsg); !ok {
 		t.Errorf("submit(\"/clear\") cmd produced %#v, want a statusRefreshMsg", cmd())
 	}
-	if len(mm.lines) != 0 {
-		t.Errorf("lines = %+v, want empty after /clear", mm.lines)
+	// The banner (issue #169) reappears as the freshly-cleared transcript's
+	// new first line, rather than lines going back to empty.
+	if len(mm.lines) == 0 || !strings.Contains(mm.lines[0].text, "Liam") {
+		t.Errorf("lines = %+v, want the startup banner as the sole line after /clear", mm.lines)
 	}
 	if mm.sess.Messages != nil {
 		t.Errorf("sess.Messages = %+v, want nil after /clear", mm.sess.Messages)
@@ -457,18 +459,35 @@ func TestNewAppliesThemeModeOverrideWithoutDetection(t *testing.T) {
 		t.Errorf("pal = %+v, want the light palette when theme.mode=light", m.pal)
 	}
 
-	// Init() always fires the statusLine session-start refresh (issue
-	// #60), so it's never nil; theme.mode=light's own effect is that this
-	// is the *only* cmd it returns — no background-color request batched
-	// alongside it (compactCmds returns a lone cmd directly rather than
-	// wrapping it in a tea.BatchMsg, so a statusRefreshMsg alone proves
-	// nothing else was requested).
+	// Init() always fires the statusLine session-start refresh (issue #60)
+	// and the startup banner (issue #169), so it's never nil; theme.mode=
+	// light's own effect is that no background-color request is batched
+	// alongside them.
 	cmd := m.Init()
 	if cmd == nil {
-		t.Fatal("Init() = nil, want the statusLine session-start refresh")
+		t.Fatal("Init() = nil, want the statusLine session-start refresh and the startup banner")
 	}
-	if _, ok := cmd().(statusRefreshMsg); !ok {
-		t.Error("Init() returned more than just the statusLine refresh despite theme.mode override")
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Init() = %#v, want a tea.BatchMsg (statusTick + showBanner, no background-color request)", cmd())
+	}
+
+	var sawStatus, sawBanner bool
+	for _, c := range batch {
+		switch c().(type) {
+		case statusRefreshMsg:
+			sawStatus = true
+		case bannerMsg:
+			sawBanner = true
+		default:
+			t.Errorf("Init() batched an unexpected cmd producing %#v despite theme.mode override", c())
+		}
+	}
+	if !sawStatus {
+		t.Error("Init() didn't include the statusLine session-start refresh")
+	}
+	if !sawBanner {
+		t.Error("Init() didn't include the startup banner")
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/mgoodness/liam/internal/render"
 	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/shellrun"
 	"github.com/mgoodness/liam/internal/theme"
@@ -251,20 +252,19 @@ func truncateRows(rows []string, width int) []string {
 	return out
 }
 
-// defaultRows renders the built-in default: an identity line (badge, model,
-// cwd, git branch/dirty) and a metrics bar (context %, tool-call count,
-// elapsed duration, running cost), matching the prototype's design
-// (prototype/tui-shell's statusBlock) with one deliberate departure: the
-// prototype's mockup ended the metrics line with the active theme's name,
-// but ticket #27's resolution (which superseded the prototype on this
-// point) dropped theme entirely — "not needed in the status line
-// itself" — so it's replaced here with the now-real running cost the
-// prototype could only mock.
+// defaultRows renders the built-in default: an identity line (model, cwd,
+// git branch/dirty) and a metrics bar (context %, tool-call count, elapsed
+// duration, running cost), matching the prototype's design (prototype/
+// tui-shell's statusBlock) with two deliberate departures: the prototype's
+// mockup ended the metrics line with the active theme's name, but ticket
+// #27's resolution (which superseded the prototype on this point) dropped
+// theme entirely — "not needed in the status line itself" — so it's
+// replaced here with the now-real running cost the prototype could only
+// mock; and the identity line's leading "Liam" badge (also from the
+// prototype) was dropped once the startup banner (issue #169) started
+// showing "Liam" prominently every session, making the statusLine's own
+// copy of it redundant.
 func defaultRows(in Input, pal theme.Palette) []string {
-	badge := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(pal.Base)).
-		Background(lipgloss.Color(pal.Mauve)).
-		Bold(true).Padding(0, 1).Render("Liam")
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Subtext))
 
 	var segs []string
@@ -272,7 +272,9 @@ func defaultRows(in Input, pal theme.Palette) []string {
 		segs = append(segs, in.Model)
 	}
 	if in.Cwd != "" {
-		segs = append(segs, in.Cwd)
+		// Display-only: in.Cwd itself (the JSON payload, gitInfo's lookup
+		// root) stays the original, uncollapsed path.
+		segs = append(segs, render.CollapseHome(in.Cwd))
 	}
 	if in.Git != nil {
 		branch := "🌿 " + in.Git.Branch
@@ -281,7 +283,7 @@ func defaultRows(in Input, pal theme.Palette) []string {
 		}
 		segs = append(segs, branch)
 	}
-	line1 := badge + " " + dim.Render(strings.Join(segs, "  •  "))
+	line1 := dim.Render(strings.Join(segs, "  •  "))
 
 	return []string{line1, metricsBar(in, pal)}
 }
