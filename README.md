@@ -1,5 +1,7 @@
 # Liam
 
+<img src="assets/liam.svg" alt="Liam logo" width="120" align="right"/>
+
 A minimal coding-agent harness written in idiomatic Go, run as a terminal
 program — interactive TUI or headless. Strongly prefers the Go standard
 library, ships a small coding-focused built-in toolset, and supports Hooks,
