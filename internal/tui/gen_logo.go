@@ -22,13 +22,14 @@ import (
 
 // cols/rows are the block-art's fixed output size: cols half-block columns
 // by rows half-block rows (each row samples 2 source pixel rows). Chosen by
-// hand (see issue #169's PR) as the largest grid that still reads as a
-// recognizable, compact silhouette beside 3 lines of banner text — much
-// larger and the shape washes out into noise at typical terminal fonts,
-// much smaller and it stops being recognizable at all.
+// hand (see issue #169's PR) as the size that reads clearly as the source
+// logo's shape (ears, eyes, nose) without either washing out into blocky
+// noise (too small — 20x9 was tried first and rejected as illegible) or
+// picking up the source art's fine surface-texture detail as speckle
+// (larger grids do, and needlessly grow the banner's footprint too).
 const (
-	cols = 20
-	rows = 9
+	cols = 32
+	rows = 15
 )
 
 // alphaThreshold is the un-premultiplied alpha (0-1) below which a sampled
