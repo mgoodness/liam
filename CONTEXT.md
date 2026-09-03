@@ -61,8 +61,12 @@ Long-lived, provider-specific authentication material liam persists across sessi
 _Avoid_: API key (a Credential is specifically the persisted-OAuth-token case), token (bare — ambiguous with e.g. a tool-call ID).
 
 **Session**:
-One continuous conversation between the user and the harness, with its own history and active toolset, ending when the user exits or explicitly resets it.
+One continuous conversation between the user and the harness, with its own history and active toolset, ending when the user exits or explicitly resets it. Not to be confused with a **Subagent**'s internal conversation, which has no user-driven lifecycle at all.
 _Avoid_: conversation, chat.
+
+**Subagent**:
+A nested instance of the agent loop, spawned in-process by the model (via a dedicated tool) to delegate a bounded sub-task, sharing the parent Session's toolset and working directory but starting with a fresh, independent context budget. Completes automatically when its delegated task returns — it has no user-facing lifecycle, and is not itself a Session.
+_Avoid_: session (bare — see Session's own entry), sub-session, agent (bare).
 
 **Compaction**:
 Condensing a session's older turns into a single model-generated summary once a sliding window of recent turns is exceeded, so a long conversation doesn't hit the model's context limit. Triggered manually (`/compact`) or automatically at ~85% context usage, or reactively after a `ContextTooLong` provider error.
