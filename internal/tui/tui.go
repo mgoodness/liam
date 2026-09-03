@@ -314,8 +314,9 @@ var defaultBannerTimeout = 300 * time.Millisecond
 
 // Init requests the terminal's background color for theme auto-detection
 // (unless theme.mode already forces dark/light) and kicks off statusLine's
-// session-start refresh trigger — plus its optional periodic timer, when
-// config.StatusLineConfig.RefreshInterval is configured. m.statusGen is
+// session-start refresh trigger — plus its periodic timer, which runs by
+// default (statusline.DefaultRefreshInterval) even when
+// config.StatusLineConfig.RefreshInterval is unset (issue #146). m.statusGen is
 // already 1 by construction (see New()), so this schedules that same
 // generation's debounce tick directly rather than going through
 // requestStatusRefresh: Init has a value receiver, and any mutation it made

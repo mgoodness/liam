@@ -453,7 +453,11 @@ func TestUpdateBackgroundColorMsgResolvesTheme(t *testing.T) {
 }
 
 func TestNewAppliesThemeModeOverrideWithoutDetection(t *testing.T) {
-	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "light"}}, nil)
+	noTimer := 0
+	m := New(agent.Loop{}, config.Config{
+		Theme:      config.ThemeConfig{Mode: "light"},
+		StatusLine: config.StatusLineConfig{RefreshInterval: &noTimer}, // avoid a real 1s sleep when the test invokes cmd() below
+	}, nil)
 	m.statusDebounce = 0 // avoid a real 300ms sleep when the test invokes cmd() below
 	if m.pal.Dark {
 		t.Errorf("pal = %+v, want the light palette when theme.mode=light", m.pal)
