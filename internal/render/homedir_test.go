@@ -24,3 +24,15 @@ func TestCollapseHome(t *testing.T) {
 		})
 	}
 }
+
+// TestCollapseHomeHomeUnset covers the doc comment's documented edge case:
+// os.UserHomeDir failing (no $HOME set) leaves path unchanged rather than
+// erroring, since CollapseHome only ever feeds display text.
+func TestCollapseHomeHomeUnset(t *testing.T) {
+	t.Setenv("HOME", "")
+
+	path := "/some/path"
+	if got := CollapseHome(path); got != path {
+		t.Errorf("CollapseHome(%q) = %q, want %q unchanged when $HOME is unset", path, got, path)
+	}
+}
