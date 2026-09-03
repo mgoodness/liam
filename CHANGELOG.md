@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.1.0](https://github.com/mgoodness/liam/compare/v1.0.0...v1.1.0) (2026-09-03)
+
+
+### Features
+
+* **tui:** add a startup header banner, like Claude Code's ([#172](https://github.com/mgoodness/liam/issues/172)) ([1e02b8c](https://github.com/mgoodness/liam/commit/1e02b8c07a238643ff5ac375f2f52a9852a287fc))
+* **tui:** add manual /compact slash command ([#127](https://github.com/mgoodness/liam/issues/127)) ([7d27d30](https://github.com/mgoodness/liam/commit/7d27d3065581eccb3acfcff287a92f5246264d06))
+* **tui:** append a completion summary line after each turn ([#167](https://github.com/mgoodness/liam/issues/167)) ([a3c939a](https://github.com/mgoodness/liam/commit/a3c939a66e7f59597da19d53a13276890faa8ecc))
+* **tui:** bordered input box, drop placeholder text ([#163](https://github.com/mgoodness/liam/issues/163)) ([c50e368](https://github.com/mgoodness/liam/commit/c50e368e3bc498dab5a0a53c35574a2aa979b1b5))
+* **tui:** copy transcript text via click-drag selection and OSC-52 ([#150](https://github.com/mgoodness/liam/issues/150)) ([138a10f](https://github.com/mgoodness/liam/commit/138a10f8f29c6bc2a607d36d670d7144eb191a11))
+* **tui:** implement /&lt;skill-name&gt; force-activation command ([#125](https://github.com/mgoodness/liam/issues/125)) ([0b6102f](https://github.com/mgoodness/liam/commit/0b6102f067e1d7e12b416e972f3ad26ee83263bf))
+* **tui:** pad the turn-in-progress indicator with blank lines above and below ([#165](https://github.com/mgoodness/liam/issues/165)) ([23b24b3](https://github.com/mgoodness/liam/commit/23b24b3a28a788ab45cd022823a5ee90be608b61))
+* **tui:** render mention/slash popups as floating bordered dialogs ([#147](https://github.com/mgoodness/liam/issues/147)) ([b376cb2](https://github.com/mgoodness/liam/commit/b376cb25ffc6816df115628b89aa4782f948622d))
+* **tui:** render slash commands and /skills as an aligned, truncated table ([#157](https://github.com/mgoodness/liam/issues/157)) ([c64f2d2](https://github.com/mgoodness/liam/commit/c64f2d25163c24dd3801888d402ae5cd3b13d2e8))
+* **tui:** show an animated turn-in-progress indicator above the input ([#154](https://github.com/mgoodness/liam/issues/154)) ([cd41d71](https://github.com/mgoodness/liam/commit/cd41d71dde43e10839a87852b45b1f0dc1604307))
+* **tui:** suggest slash commands via a fuzzy popup as you type ([#140](https://github.com/mgoodness/liam/issues/140)) ([848c9e4](https://github.com/mgoodness/liam/commit/848c9e497f9baa4a97156c7c2a436cf0b084de78))
+
+
+### Bug Fixes
+
+* **ci:** run the test matrix on release-please branches too ([#173](https://github.com/mgoodness/liam/issues/173)) ([dedf0ac](https://github.com/mgoodness/liam/commit/dedf0ac4f3ac1f3de907d18e8a2f2fcca428188f))
+* **cmd/liam:** stop logging find/grep searcher choice to stderr ([#129](https://github.com/mgoodness/liam/issues/129)) ([99e4742](https://github.com/mgoodness/liam/commit/99e474257495873df13ce8c7ffe74a5fbab0dbac))
+* **identity:** capitalize Liam in self-identification strings ([#168](https://github.com/mgoodness/liam/issues/168)) ([79dfa04](https://github.com/mgoodness/liam/commit/79dfa048c70d1ff1db685a0fd51d4699224fc77f))
+* **statusline:** render the status block below the input line ([#119](https://github.com/mgoodness/liam/issues/119)) ([e651f76](https://github.com/mgoodness/liam/commit/e651f76abc2f94b1e1897bd669524961af0018d1))
+* **tui:** blend popup dialog background with the main viewport ([#162](https://github.com/mgoodness/liam/issues/162)) ([7842192](https://github.com/mgoodness/liam/commit/7842192ec2888cbae685a2ab0e52ce9fcd08d24a))
+* **tui:** print the full /&lt;skill-name&gt; command like any other input ([#135](https://github.com/mgoodness/liam/issues/135)) ([0f00734](https://github.com/mgoodness/liam/commit/0f007342af533319d1ceb295dfe1fae34e78d789))
+* **tui:** render the status block below the input line ([#136](https://github.com/mgoodness/liam/issues/136)) ([71f85e0](https://github.com/mgoodness/liam/commit/71f85e0ac03f8b9af917e4d9c22aac735d7c4827))
+* **tui:** resume auto-follow when a manual scroll reaches the bottom ([#131](https://github.com/mgoodness/liam/issues/131)) ([a8f7c6d](https://github.com/mgoodness/liam/commit/a8f7c6d7dbaf2ae8382172d5ebb87258cff77325))
+* **tui:** send trailing text after /&lt;skill-name&gt; as the first turn ([#134](https://github.com/mgoodness/liam/issues/134)) ([e7988a5](https://github.com/mgoodness/liam/commit/e7988a58207531cc7b40e26535540a01ccecabf5))
+
 ## [1.0.0](https://github.com/mgoodness/liam/compare/v0.1.0...v1.0.0) (2026-09-01)
 
 
