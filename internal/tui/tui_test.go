@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image/color"
 	"iter"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -449,6 +450,77 @@ func TestUpdateBackgroundColorMsgResolvesTheme(t *testing.T) {
 
 	if mm.pal.Dark {
 		t.Errorf("pal = %+v, want the light palette for a light BackgroundColorMsg", mm.pal)
+	}
+}
+
+// isRequestBackgroundColor reports whether cmd is literally
+// tea.RequestBackgroundColor itself (as opposed to some other non-nil Cmd) —
+// Update's FocusMsg case returns that shared top-level func value directly,
+// the same way Init does, so comparing the two funcs' pointers identifies it
+// without needing to invoke the Cmd (which would perform real terminal I/O
+// outside of a tea.Program).
+func isRequestBackgroundColor(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	return reflect.ValueOf(cmd).Pointer() == reflect.ValueOf(tea.RequestBackgroundColor).Pointer()
+}
+
+func TestUpdateFocusMsgReRequestsBackgroundColorInAutoMode(t *testing.T) {
+	// "auto" and "" (unset) are equivalent — both are the documented
+	// default (config.ThemeConfig.Mode's own doc comment) — so both must
+	// trigger the same focus-driven re-query.
+	for _, mode := range []string{"auto", ""} {
+		m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: mode}}, nil)
+
+		_, cmd := m.Update(tea.FocusMsg{})
+		if !isRequestBackgroundColor(cmd) {
+			t.Errorf("theme.mode=%q: Update(FocusMsg) cmd = %#v, want tea.RequestBackgroundColor re-issued", mode, cmd)
+		}
+	}
+}
+
+func TestViewReportsFocusOnlyInAutoMode(t *testing.T) {
+	for mode, want := range map[string]bool{"auto": true, "": true, "dark": false, "light": false} {
+		m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: mode}}, nil).WithCwd("/cwd")
+		m.width, m.height = 80, 24
+
+		if got := m.View().ReportFocus; got != want {
+			t.Errorf("theme.mode=%q: View().ReportFocus = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+func TestUpdateFocusMsgNoOpInExplicitThemeMode(t *testing.T) {
+	for _, mode := range []string{"dark", "light"} {
+		m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: mode}}, nil)
+
+		_, cmd := m.Update(tea.FocusMsg{})
+		if cmd != nil {
+			t.Errorf("theme.mode=%q: Update(FocusMsg) cmd = %#v, want nil (no re-query once the user has opted out via an explicit override)", mode, cmd)
+		}
+	}
+}
+
+func TestFocusTriggeredReQueryChangesActiveTheme(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil)
+	if !m.pal.Dark {
+		t.Fatal("pal.Dark = false before any detection, want the dark-assumed default (test's own premise)")
+	}
+
+	_, cmd := m.Update(tea.FocusMsg{})
+	if !isRequestBackgroundColor(cmd) {
+		t.Fatalf("Update(FocusMsg) cmd = %#v, want tea.RequestBackgroundColor re-issued", cmd)
+	}
+
+	// Simulate the terminal's reply to that re-issued query — a separate
+	// message from the request sentinel cmd() would itself produce, exactly
+	// as it would arrive asynchronously from a real terminal — as if the
+	// user's OS/terminal theme changed while liam was unfocused.
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
+	mm := next.(Model)
+	if mm.pal.Dark {
+		t.Errorf("pal = %+v after a light BackgroundColorMsg following a focus event, want the light palette to take effect without a restart", mm.pal)
 	}
 }
 
