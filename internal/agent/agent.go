@@ -19,6 +19,7 @@ import (
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/tool"
+	"github.com/mgoodness/liam/internal/trace"
 )
 
 // maxStreamAttempts is the total number of times a single turn's
@@ -52,6 +53,12 @@ type Loop struct {
 	// BeforeTool/AfterTool lifecycle points (see hook.Runner). nil means no
 	// hooks are configured.
 	Hooks *hook.Runner
+	// Trace, when non-nil, records issue #63's per-call audit line for
+	// every tool call dispatch makes (see dispatch/traceToolCall). nil
+	// disables tracing (e.g. in tests that don't construct one) — the real
+	// binary (cmd/liam/main.go) always sets it; there is deliberately no
+	// config toggle to disable it otherwise.
+	Trace *trace.Writer
 	// Backoff computes the delay before the retry attempt that follows a
 	// failed attempt numbered attempt (1-indexed). nil uses
 	// defaultBackoff, the real jittered exponential backoff; tests override
@@ -177,15 +184,23 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 // failing the loop — the model sees the failure and decides how to proceed.
 // When l.Hooks is set, a blocking beforeTool hook can deny the call before
 // the Tool ever runs (its stderr becomes the error Result the model sees),
-// and afterTool hooks observe every call that does run.
+// and afterTool hooks observe every call that does run. Every outcome —
+// unknown tool, denied, invalid args, errored, or a clean run — records
+// issue #63's ToolCallLine via l.Trace (see traceToolCall).
 func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result {
+	intent := extractIntent(call.ArgsJSON)
+
 	t, ok := l.Tools[call.Name]
 	if !ok {
-		return tool.Result{Content: fmt.Sprintf("unknown tool %q", call.Name), IsError: true}
+		reason := fmt.Sprintf("unknown tool %q", call.Name)
+		l.traceToolCall(call.Name, "", trace.DecisionErrored, intent, "", reason, 0)
+		return tool.Result{Content: reason, IsError: true}
 	}
+	sideEffect := string(t.Safety().SideEffect)
 
 	if l.Hooks != nil {
 		if d := l.Hooks.BeforeTool(ctx, call.Name, call.ArgsJSON); d.Blocked {
+			l.traceToolCall(call.Name, sideEffect, trace.DecisionDeniedByHook, intent, d.Source, d.Reason, 0)
 			return tool.Result{Content: d.Reason, IsError: true}
 		}
 	}
@@ -193,17 +208,41 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 	var args map[string]any
 	if call.ArgsJSON != "" {
 		if err := json.Unmarshal([]byte(call.ArgsJSON), &args); err != nil {
-			return tool.Result{Content: fmt.Sprintf("invalid arguments for %s: %v", call.Name, err), IsError: true}
+			reason := fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
+			l.traceToolCall(call.Name, sideEffect, trace.DecisionErrored, intent, "", reason, 0)
+			return tool.Result{Content: reason, IsError: true}
 		}
 	}
+	// intent is liam's own injected property (see withIntent), not one the
+	// Tool itself declared — strip it before Run sees args, same as if the
+	// Tool had never advertised it.
+	delete(args, intentProperty)
 
+	start := time.Now()
 	result := t.Run(ctx, args)
+	duration := time.Since(start)
 
 	if l.Hooks != nil {
 		l.Hooks.AfterTool(ctx, call.Name, call.ArgsJSON, result.Content, result.IsError)
 	}
 
+	decision, reason := trace.DecisionExecuted, ""
+	if result.IsError {
+		decision, reason = trace.DecisionErrored, result.Content
+	}
+	l.traceToolCall(call.Name, sideEffect, decision, intent, "", reason, duration)
+
 	return result
+}
+
+// traceToolCall records one ToolCallLine via l.Trace, a no-op when l.Trace
+// is nil (every real call site — cmd/liam/main.go — always sets it; nil
+// only covers tests that build a Loop directly without one).
+func (l Loop) traceToolCall(name, sideEffect string, decision trace.Decision, intent, source, reason string, duration time.Duration) {
+	if l.Trace == nil {
+		return
+	}
+	l.Trace.WriteToolCall(name, sideEffect, decision, intent, source, reason, duration)
 }
 
 // streamTurn drives one or more Provider.Stream attempts for a single turn,
@@ -366,7 +405,7 @@ func toolDefs(reg tool.Registry) []provider.ToolDef {
 		out = append(out, provider.ToolDef{
 			Name:        t.Name(),
 			Description: t.Description(),
-			Parameters:  map[string]any(t.Parameters()),
+			Parameters:  withIntent(t.Parameters()),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -23,6 +23,7 @@ import (
 	"github.com/mgoodness/liam/internal/session"
 	"github.com/mgoodness/liam/internal/skill"
 	"github.com/mgoodness/liam/internal/tool"
+	"github.com/mgoodness/liam/internal/trace"
 	"github.com/mgoodness/liam/internal/tui"
 )
 
@@ -130,15 +131,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if catalog := skill.ModelCatalog(skills); len(catalog) > 0 {
 		tools = append(tools, tool.ActivateSkill{Catalog: catalog})
 	}
+	// Issue #63's Trace: always-on, no config toggle — every real run
+	// (interactive or headless) gets one, wired into both the tool-dispatch
+	// path (loop.Trace) and the hook-execution path (hooks.Trace).
+	tracer := trace.New()
+	tracer.Warn = func(msg string) { fmt.Fprintf(stderr, "Liam: %s\n", msg) }
 	hooks := &hook.Runner{
 		Hooks: cfg.Hooks,
 		Cwd:   cwd,
 		Warn:  func(msg string) { fmt.Fprintf(stderr, "Liam: %s\n", msg) },
+		Trace: tracer,
 	}
 	loop := agent.Loop{
 		Provider: p,
 		Tools:    tool.NewRegistry(tools...),
 		Hooks:    hooks,
+		Trace:    tracer,
 	}
 
 	// MCP tool loading starts now, in the background — liam stays usable
@@ -286,6 +294,12 @@ func runInteractive(deps interactiveDeps, stdin io.Reader, stdout, stderr io.Wri
 		WithFindSearcher(deps.findSearcher).
 		WithCwd(deps.cwd).
 		WithVersion(deps.version)
+	// Trace.Close is deferred before SessionEnd so LIFO ordering runs
+	// SessionEnd first, then Close — SessionEnd's own hook-run trace lines
+	// (see hook.Runner.run) get enqueued before Trace stops draining them.
+	if deps.loop.Trace != nil {
+		defer deps.loop.Trace.Close()
+	}
 	if deps.loop.Hooks != nil {
 		defer deps.loop.Hooks.SessionEnd(context.Background())
 	}
@@ -314,8 +328,19 @@ func runHeadless(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, p
 	ctx := context.Background()
 	mcp.Merge(ctx, loop.Tools, mcpLoader, func(msg string) { fmt.Fprintf(stderr, "Liam: %s\n", msg) })
 
+	// sessID is shared between loop.Trace and loop.Hooks (when set) rather
+	// than each resolving its own session.New(), so a headless run's tool
+	// calls and hook runs land in the very same trace file.
+	sessID := session.New().ID
+	if loop.Trace != nil {
+		loop.Trace.SessionID = sessID
+		// Registered before SessionEnd's defer below so LIFO ordering runs
+		// SessionEnd first, then Close — see runInteractive's identical
+		// reasoning.
+		defer loop.Trace.Close()
+	}
 	if loop.Hooks != nil {
-		loop.Hooks.SessionID = session.New().ID
+		loop.Hooks.SessionID = sessID
 		loop.Hooks.SessionStart(ctx)
 		defer loop.Hooks.SessionEnd(ctx)
 	}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mgoodness/liam/internal/xdg"
 )
 
 // TrustStore persists one-time per-project decisions about whether
@@ -27,7 +29,7 @@ type trustRecord struct {
 // OpenTrustStore resolves the trust store's file path. The file itself
 // need not exist yet — it's created on the first Record call.
 func OpenTrustStore() (*TrustStore, error) {
-	base, err := xdgStateHome()
+	base, err := xdg.StateHome()
 	if err != nil {
 		return nil, fmt.Errorf("skill: locating state directory: %w", err)
 	}

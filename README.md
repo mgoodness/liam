@@ -27,6 +27,9 @@ MCP, and Agent Skills through a small number of well-chosen seams.
   project skills are trust-gated with a one-time prompt.
 - **Hooks** — `sessionStart`/`sessionEnd`/`beforeTool`/`afterTool`, each an
   external command that can allow/deny (`beforeTool`) or just observe.
+- **Trace** — an always-on, unconfigurable per-session audit log of every
+  tool call's outcome and every Hook run, written as JSONL to
+  `$XDG_STATE_HOME/liam/traces/<session-id>.jsonl`.
 - **Project instructions** — `AGENTS.md`/`LIAM.md`, discovered walking from
   the git root down to your working directory, plus a personal
   `$XDG_CONFIG_HOME/liam/LIAM.md`.
