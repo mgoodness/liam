@@ -96,6 +96,15 @@ type systemLineMsg struct{ text string }
 // resolved (see Init's doc comment).
 type bannerMsg struct{}
 
+// themeDetectTimeoutMsg signals giving up on an outstanding OSC-11
+// background-color reply — startup detection or a focus-triggered
+// re-query (issue #103) — because some terminals never answer at all
+// (tmux/screen's blanket refusal). Shared between both call sites: the
+// fallback is identical either way — stop withholding v.BackgroundColor
+// and paint whatever m.pal currently is, rather than leaving the
+// terminal's background unpainted forever.
+type themeDetectTimeoutMsg struct{}
+
 // Model is the Bubbletea model driving liam's interactive shell.
 type Model struct {
 	loop         agent.Loop
@@ -106,6 +115,17 @@ type Model struct {
 
 	themeMode string // cfg.Theme.Mode: "auto" (default), "dark", "light"
 	pal       theme.Palette
+	// themeDetectPending is true while an OSC-11 background-color reply is
+	// awaited (startup detection or a focus-triggered re-query, issue
+	// #103). View() withholds v.BackgroundColor entirely while this is
+	// true: v.BackgroundColor is itself an OSC-11 *set*, and a terminal's
+	// OSC-11 *get* simply echoes back whatever was most recently set — so
+	// painting the background from a stale/placeholder m.pal while a
+	// query is in flight would make the query's own reply just echo that
+	// same stale value back, permanently poisoning detection (confirmed
+	// by direct OSC-11 set-then-get testing during #103's follow-up
+	// diagnosis; see docs/adr/0010's addendum).
+	themeDetectPending bool
 
 	lines []line
 	// streaming accumulates the current turn's in-progress assistant text.
@@ -160,6 +180,10 @@ type Model struct {
 	// bannerTimeout is defaultBannerTimeout in New(); tests may override it
 	// to avoid a real sleep, matching statusDebounce/indicatorTick.
 	bannerTimeout time.Duration
+	// themeRequeryDelay is defaultThemeRequeryDelay in New(); tests may
+	// override it to avoid a real sleep, matching bannerTimeout. See
+	// themeRequeryCmd's doc comment for why the delay exists at all.
+	themeRequeryDelay time.Duration
 
 	statusCfg      config.StatusLineConfig
 	statusTracker  *statusline.Tracker // tool-call count/duration, reset alongside sess.Clear() on /clear
@@ -245,21 +269,30 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 		skills:    skills,
 		themeMode: mode,
 		// Assume dark until/unless auto-detection says otherwise — matches
-		// the spec's "default to dark (Frappe) on detection failure".
-		pal:          theme.Resolve(mode, true),
-		input:        newTextarea(),
-		hist:         newHistory(),
-		viewport:     viewport.New(),
-		followBottom: true,
-		streaming:    &strings.Builder{},
+		// the spec's "default to dark (Frappe) on detection failure". Only
+		// a placeholder while themeDetectPending is true (mode == "auto"),
+		// since View() withholds painting it until a real reply arrives.
+		pal: theme.Resolve(mode, true),
+		// themeDetectPending starts true in "auto" mode (themeModeIsAuto,
+		// since themeIsAuto() itself isn't callable until m exists) so
+		// even the very first render withholds v.BackgroundColor —
+		// nothing is ever painted from New()'s dark-assumed placeholder
+		// before the startup query's real reply arrives.
+		themeDetectPending: themeModeIsAuto(mode),
+		input:              newTextarea(),
+		hist:               newHistory(),
+		viewport:           viewport.New(),
+		followBottom:       true,
+		streaming:          &strings.Builder{},
 
 		statusCfg:      cfg.StatusLine,
 		statusTracker:  statusline.NewTracker(),
 		statusGen:      1, // Init() schedules gen 1's debounce tick directly, without mutating a throwaway Model copy
 		statusDebounce: defaultStatusDebounce,
 
-		indicatorTick: defaultIndicatorTick,
-		bannerTimeout: defaultBannerTimeout,
+		indicatorTick:     defaultIndicatorTick,
+		bannerTimeout:     defaultBannerTimeout,
+		themeRequeryDelay: defaultThemeRequeryDelay,
 	}
 	applyTextareaTheme(&m.input, m.pal)
 	return m
@@ -346,7 +379,7 @@ var defaultBannerTimeout = 300 * time.Millisecond
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.statusTick(m.statusGen)}
 	if m.themeIsAuto() {
-		cmds = append(cmds, tea.RequestBackgroundColor, m.bannerTimeoutCmd())
+		cmds = append(cmds, tea.RequestBackgroundColor, m.bannerTimeoutCmd(), m.themeDetectTimeoutCmd())
 	} else {
 		cmds = append(cmds, m.showBanner())
 	}
@@ -362,7 +395,14 @@ func (m Model) Init() tea.Cmd {
 // #103, ADR-0010): an explicit override means the user has opted out of
 // detection entirely, so there's nothing to (re-)query.
 func (m Model) themeIsAuto() bool {
-	return m.themeMode != "dark" && m.themeMode != "light"
+	return themeModeIsAuto(m.themeMode)
+}
+
+// themeModeIsAuto is themeIsAuto's underlying check, factored out so New()
+// can apply it to the constructor's local mode value directly — themeIsAuto
+// itself isn't callable until m exists.
+func themeModeIsAuto(mode string) bool {
+	return mode != "dark" && mode != "light"
 }
 
 // showBanner builds a Cmd that immediately (no I/O, no delay) resolves to a
@@ -376,6 +416,43 @@ func (m Model) showBanner() tea.Cmd {
 // — see Init's doc comment for why theme.mode "auto" needs this at all.
 func (m Model) bannerTimeoutCmd() tea.Cmd {
 	return tea.Tick(m.bannerTimeout, func(time.Time) tea.Msg { return bannerMsg{} })
+}
+
+// themeDetectTimeoutCmd schedules a fallback themeDetectTimeoutMsg,
+// m.bannerTimeout from now — reuses the same duration as bannerTimeoutCmd
+// since both represent "how long to wait for a terminal's OSC-11 reply
+// before giving up." Scheduled alongside every OSC-11 query this Model
+// issues (Init's startup query and Update's FocusMsg-triggered re-query) so
+// m.themeDetectPending can never get stuck true forever. In the FocusMsg
+// case this Cmd starts counting down immediately, while themeRequeryCmd's
+// actual query doesn't fire until m.themeRequeryDelay later — so the
+// effective reply window there is m.bannerTimeout minus
+// m.themeRequeryDelay, not the full m.bannerTimeout; harmless with the
+// current defaults (300ms vs. 50ms) but worth knowing before either default
+// changes.
+func (m Model) themeDetectTimeoutCmd() tea.Cmd {
+	return tea.Tick(m.bannerTimeout, func(time.Time) tea.Msg { return themeDetectTimeoutMsg{} })
+}
+
+// defaultThemeRequeryDelay bounds how long Update's FocusMsg case waits
+// after withholding v.BackgroundColor (which makes the very next render
+// emit an OSC-11 reset, undoing liam's own previously-painted background)
+// before actually issuing the re-query itself. Without this gap, the
+// OSC-11 GET request — dispatched via its own goroutine, a handful of
+// bytes — can reach the terminal before the reset render (a full
+// View()/flush cycle) does, reading back liam's own still-current painted
+// color instead of the terminal's true background and defeating
+// re-detection entirely. Comfortably longer than every round-trip latency
+// measured while diagnosing this (single-digit milliseconds) — see
+// docs/adr/0010's addendum. m.themeRequeryDelay in New(); tests may
+// override it to avoid a real sleep, matching bannerTimeout.
+var defaultThemeRequeryDelay = 50 * time.Millisecond
+
+// themeRequeryCmd schedules the actual OSC-11 re-query m.themeRequeryDelay
+// after Update's FocusMsg case withholds v.BackgroundColor — see
+// defaultThemeRequeryDelay's doc comment for why the gap is needed at all.
+func (m Model) themeRequeryCmd() tea.Cmd {
+	return tea.Tick(m.themeRequeryDelay, func(time.Time) tea.Msg { return tea.RequestBackgroundColor() })
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -393,6 +470,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.BackgroundColorMsg:
 		m.pal = theme.Resolve(m.themeMode, msg.IsDark())
+		m.themeDetectPending = false
 		applyTextareaTheme(&m.input, m.pal)
 		// Detection resolved before defaultBannerTimeout's fallback fired —
 		// the common case (see Init's doc comment) — so this is where the
@@ -411,7 +489,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.themeIsAuto() {
 			return m, nil
 		}
-		return m, tea.RequestBackgroundColor
+		// themeDetectPending withholds v.BackgroundColor starting with the
+		// very next render, so that render's OSC-11 reset (undoing
+		// whatever this Model last painted) has a chance to reach the
+		// terminal before themeRequeryCmd's actual GET query does — see
+		// themeRequeryDelay's doc comment for why the ordering matters.
+		m.themeDetectPending = true
+		return m, tea.Batch(m.themeRequeryCmd(), m.themeDetectTimeoutCmd())
+
+	case themeDetectTimeoutMsg:
+		m.themeDetectPending = false
+		m.refreshViewport()
+		return m, nil
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -1002,7 +1091,13 @@ func (m Model) View() tea.View {
 
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.BackgroundColor = lipgloss.Color(m.pal.Base)
+	// Withheld (left nil) while m.themeDetectPending: v.BackgroundColor is
+	// an OSC-11 *set*, and painting it from a stale/placeholder m.pal
+	// while an OSC-11 GET reply is in flight would let that same set
+	// answer the query — see themeDetectPending's doc comment on Model.
+	if !m.themeDetectPending {
+		v.BackgroundColor = lipgloss.Color(m.pal.Base)
+	}
 	v.MouseMode = tea.MouseModeCellMotion
 	// Enables tea.FocusMsg (issue #103, ADR-0010's live theme re-detection),
 	// gated the same way as Update's FocusMsg case and Init's startup
