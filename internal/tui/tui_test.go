@@ -453,17 +453,96 @@ func TestUpdateBackgroundColorMsgResolvesTheme(t *testing.T) {
 	}
 }
 
-// isRequestBackgroundColor reports whether cmd is literally
-// tea.RequestBackgroundColor itself (as opposed to some other non-nil Cmd) —
-// Update's FocusMsg case returns that shared top-level func value directly,
-// the same way Init does, so comparing the two funcs' pointers identifies it
-// without needing to invoke the Cmd (which would perform real terminal I/O
-// outside of a tea.Program).
-func isRequestBackgroundColor(cmd tea.Cmd) bool {
-	if cmd == nil {
-		return false
+// isBackgroundColorRequestMsg reports whether msg is the private sentinel
+// tea.RequestBackgroundColor() itself produces — the type is unexported, so
+// this can't be a type switch from outside package tea; comparing the
+// reflect type name is the only option available to a test in this package.
+func isBackgroundColorRequestMsg(msg tea.Msg) bool {
+	return reflect.TypeOf(msg).String() == "tea.backgroundColorMsg"
+}
+
+// batchIncludesBackgroundColorRequest runs every Cmd in batch and reports
+// whether any of them produced tea.RequestBackgroundColor()'s own sentinel
+// Msg — used to confirm Update's FocusMsg case's batched re-query (wrapped
+// in a tea.Tick, unlike Init's direct tea.RequestBackgroundColor) actually
+// includes a real OSC-11 GET request once its delay elapses.
+func batchIncludesBackgroundColorRequest(batch tea.BatchMsg) bool {
+	for _, c := range batch {
+		if isBackgroundColorRequestMsg(c()) {
+			return true
+		}
 	}
-	return reflect.ValueOf(cmd).Pointer() == reflect.ValueOf(tea.RequestBackgroundColor).Pointer()
+	return false
+}
+
+// TestViewWithholdsBackgroundColorWhileThemeDetectPending guards the actual
+// root cause behind #103's live re-detection silently never working: a
+// terminal's OSC-11 GET simply echoes back whatever was most recently SET,
+// so painting v.BackgroundColor from a stale/placeholder m.pal while a
+// detection reply is in flight — at startup, or after a later FocusMsg
+// re-query — would make the query's own reply just echo that same stale
+// value back, permanently poisoning detection (confirmed by direct OSC-11
+// set-then-get testing; see docs/adr/0010's addendum).
+func TestViewWithholdsBackgroundColorWhileThemeDetectPending(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil).WithCwd("/cwd")
+	m.width, m.height = 80, 24
+
+	if !m.themeDetectPending {
+		t.Fatal("themeDetectPending = false right after New() in auto mode, want true (test's own premise)")
+	}
+	if got := m.View().BackgroundColor; got != nil {
+		t.Errorf("View().BackgroundColor = %v while themeDetectPending, want nil so it can't poison the in-flight OSC-11 query", got)
+	}
+
+	// The startup query's reply arrives — painting should resume, using
+	// the newly resolved palette.
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
+	m = next.(Model)
+	if m.themeDetectPending {
+		t.Fatal("themeDetectPending = true after BackgroundColorMsg, want false (test's own premise)")
+	}
+	if got := m.View().BackgroundColor; got == nil {
+		t.Error("View().BackgroundColor = nil once detection resolved, want the resolved palette's Base painted again")
+	}
+
+	// A later focus event re-issuing the query must withhold painting
+	// again, exactly like startup — this is the actual re-detection fix:
+	// without it, the re-query's own reply would just read back this
+	// Model's own last-painted color instead of the terminal's real one.
+	next, _ = m.Update(tea.FocusMsg{})
+	m = next.(Model)
+	if !m.themeDetectPending {
+		t.Fatal("themeDetectPending = false right after FocusMsg, want true (test's own premise)")
+	}
+	if got := m.View().BackgroundColor; got != nil {
+		t.Errorf("View().BackgroundColor = %v while a focus-triggered re-query is pending, want nil", got)
+	}
+}
+
+// TestThemeDetectTimeoutMsgResumesPaintingWithoutChangingPalette covers the
+// fallback when a terminal never answers the OSC-11 query at all (e.g.
+// tmux/screen's blanket refusal, or a focus-triggered re-query that never
+// gets a reply): themeDetectPending must eventually clear on its own so
+// View() doesn't withhold v.BackgroundColor forever, and it must do so
+// without altering m.pal — there's no reply to resolve a new palette from,
+// so the prior (already-correct) palette's own paint should simply resume.
+func TestThemeDetectTimeoutMsgResumesPaintingWithoutChangingPalette(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil).WithCwd("/cwd")
+	m.width, m.height = 80, 24
+	wantPal := m.pal
+
+	next, _ := m.Update(themeDetectTimeoutMsg{})
+	m = next.(Model)
+
+	if m.themeDetectPending {
+		t.Error("themeDetectPending = true after themeDetectTimeoutMsg, want false")
+	}
+	if m.pal != wantPal {
+		t.Errorf("pal = %+v after themeDetectTimeoutMsg, want unchanged %+v (no reply to resolve a new one from)", m.pal, wantPal)
+	}
+	if got := m.View().BackgroundColor; got == nil {
+		t.Error("View().BackgroundColor = nil after themeDetectTimeoutMsg, want painting to resume")
+	}
 }
 
 func TestUpdateFocusMsgReRequestsBackgroundColorInAutoMode(t *testing.T) {
@@ -472,10 +551,22 @@ func TestUpdateFocusMsgReRequestsBackgroundColorInAutoMode(t *testing.T) {
 	// trigger the same focus-driven re-query.
 	for _, mode := range []string{"auto", ""} {
 		m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: mode}}, nil)
+		// Avoid the real themeRequeryDelay/bannerTimeout sleeps when the
+		// test invokes the returned Cmd below (matches
+		// TestNewAppliesThemeModeOverrideWithoutDetection's own approach).
+		m.themeRequeryDelay = 0
+		m.bannerTimeout = 0
 
 		_, cmd := m.Update(tea.FocusMsg{})
-		if !isRequestBackgroundColor(cmd) {
-			t.Errorf("theme.mode=%q: Update(FocusMsg) cmd = %#v, want tea.RequestBackgroundColor re-issued", mode, cmd)
+		if cmd == nil {
+			t.Fatalf("theme.mode=%q: Update(FocusMsg) cmd = nil, want a batched re-query", mode)
+		}
+		batch, ok := cmd().(tea.BatchMsg)
+		if !ok {
+			t.Fatalf("theme.mode=%q: Update(FocusMsg) cmd() = %#v, want tea.BatchMsg (re-query + detect-timeout)", mode, cmd())
+		}
+		if !batchIncludesBackgroundColorRequest(batch) {
+			t.Errorf("theme.mode=%q: Update(FocusMsg)'s batch didn't include a background-color re-query", mode)
 		}
 	}
 }
@@ -504,23 +595,35 @@ func TestUpdateFocusMsgNoOpInExplicitThemeMode(t *testing.T) {
 
 func TestFocusTriggeredReQueryChangesActiveTheme(t *testing.T) {
 	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil)
+	// Avoid the real themeRequeryDelay/bannerTimeout sleeps when the test
+	// invokes the returned Cmd below.
+	m.themeRequeryDelay = 0
+	m.bannerTimeout = 0
 	if !m.pal.Dark {
 		t.Fatal("pal.Dark = false before any detection, want the dark-assumed default (test's own premise)")
 	}
 
-	_, cmd := m.Update(tea.FocusMsg{})
-	if !isRequestBackgroundColor(cmd) {
-		t.Fatalf("Update(FocusMsg) cmd = %#v, want tea.RequestBackgroundColor re-issued", cmd)
+	next, cmd := m.Update(tea.FocusMsg{})
+	m = next.(Model)
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || !batchIncludesBackgroundColorRequest(batch) {
+		t.Fatalf("Update(FocusMsg) cmd() = %#v, want a batch including a background-color re-query", cmd())
+	}
+	if !m.themeDetectPending {
+		t.Error("themeDetectPending = false right after FocusMsg, want true until the reply arrives")
 	}
 
 	// Simulate the terminal's reply to that re-issued query — a separate
 	// message from the request sentinel cmd() would itself produce, exactly
 	// as it would arrive asynchronously from a real terminal — as if the
 	// user's OS/terminal theme changed while liam was unfocused.
-	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.White})
+	next, _ = m.Update(tea.BackgroundColorMsg{Color: color.White})
 	mm := next.(Model)
 	if mm.pal.Dark {
 		t.Errorf("pal = %+v after a light BackgroundColorMsg following a focus event, want the light palette to take effect without a restart", mm.pal)
+	}
+	if mm.themeDetectPending {
+		t.Error("themeDetectPending = true after BackgroundColorMsg, want false so View() resumes painting")
 	}
 }
 
