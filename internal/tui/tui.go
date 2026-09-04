@@ -2,7 +2,11 @@
 // stacked-stream layout (conversation scrollback with inline tool calls,
 // a bubbles/textarea input line), Catppuccin Frappe/Latte theming
 // auto-detected at startup and re-detected live on terminal focus under
-// theme.mode "auto" (issue #103, docs/adr/0010), and the /quit, /clear,
+// theme.mode "auto" (issue #103, docs/adr/0010) — plus, independently and
+// under the same "auto" gating, a DEC mode 2031 color-scheme push
+// (issue #203, docs/adr/0018) that some terminals fire unsolicited the
+// moment the OS-level color scheme actually changes, with no focus event
+// needed — and the /quit, /clear,
 // /skills, /compact, /<skill-name>, Escape-cancel session commands wired to
 // the agent loop's context.Context cancellation. A fuzzy-matched popup
 // (issue #137) suggests slash commands as the user types one at the start
@@ -49,6 +53,8 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mgoodness/liam/internal/agent"
 	"github.com/mgoodness/liam/internal/config"
@@ -379,7 +385,7 @@ var defaultBannerTimeout = 300 * time.Millisecond
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.statusTick(m.statusGen)}
 	if m.themeIsAuto() {
-		cmds = append(cmds, tea.RequestBackgroundColor, m.bannerTimeoutCmd(), m.themeDetectTimeoutCmd())
+		cmds = append(cmds, tea.RequestBackgroundColor, m.enableColorSchemePushCmd(), m.bannerTimeoutCmd(), m.themeDetectTimeoutCmd())
 	} else {
 		cmds = append(cmds, m.showBanner())
 	}
@@ -387,6 +393,53 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, t)
 	}
 	return tea.Batch(cmds...)
+}
+
+// enableColorSchemePushCmd sends the DEC private mode 2031 ("color scheme
+// reporting") enable sequence once, at session start — issue #203,
+// docs/adr/0018 — a second, independent live theme re-detection path
+// alongside #103's focus-triggered OSC-11 re-query. On a terminal that
+// supports it, this causes an unsolicited uv.DarkColorSchemeEvent/
+// uv.LightColorSchemeEvent push the moment the OS-level color scheme
+// actually changes, with no focus event needed; on any other terminal it's
+// simply never answered, identical to today's behavior. tea.Raw is
+// Bubbletea's documented escape hatch for sending a raw sequence directly,
+// routed through the same synchronized output path as tea.
+// RequestBackgroundColor. Unlike that OSC-11 GET, this carries its own
+// definitive answer on push, so there's no query/response round trip for
+// liam's own background-painting to poison — none of themeDetectPending's
+// withholding logic applies here.
+func (m Model) enableColorSchemePushCmd() tea.Cmd {
+	return tea.Raw(ansi.SetModeLightDark)
+}
+
+// disableColorSchemePushCmd is enableColorSchemePushCmd's teardown
+// counterpart, sent on quit: unlike a View() field (e.g. ReportFocus),
+// tea.Raw's sequence gets no automatic reset-on-exit from Bubbletea's
+// renderer, so liam disables mode 2031 itself rather than leaving it
+// enabled in the terminal past its own session.
+func (m Model) disableColorSchemePushCmd() tea.Cmd {
+	return tea.Raw(ansi.ResetModeLightDark)
+}
+
+// quitCmd builds the Cmd every quit path (Ctrl+C, "/quit") returns: under
+// theme.mode "auto" it's tea.Sequence-d with disableColorSchemePushCmd's
+// mode-2031 teardown (see its own doc comment for why that's needed at
+// all) — deliberately Sequence, not tea.Batch: Bubbletea runs a Batch's
+// commands concurrently with no ordering guarantee, and its event loop
+// returns the instant it receives QuitMsg without draining any
+// still-in-flight sibling command, so a Batch here would race the
+// mode-2031 disable write against program shutdown and could silently
+// drop it. Sequence instead runs its commands one at a time, in order, in
+// a single goroutine — guaranteeing the disable sequence reaches the
+// terminal before tea.Quit's Cmd even runs. Under an explicit dark/light
+// override, mode 2031 was never enabled in the first place, so there's
+// nothing to disable.
+func (m Model) quitCmd() tea.Cmd {
+	if !m.themeIsAuto() {
+		return tea.Quit
+	}
+	return tea.Sequence(m.disableColorSchemePushCmd(), tea.Quit)
 }
 
 // themeIsAuto reports whether theme.mode is "auto" (the default, including
@@ -455,6 +508,37 @@ func (m Model) themeRequeryCmd() tea.Cmd {
 	return tea.Tick(m.themeRequeryDelay, func(time.Time) tea.Msg { return tea.RequestBackgroundColor() })
 }
 
+// applyPalette resolves isDark into a theme.Palette and applies it: the
+// shared shape behind both Update's tea.BackgroundColorMsg case (issue #103,
+// an OSC-11 reply) and applyColorSchemePush (issue #203, a DEC mode 2031
+// push, docs/adr/0018) — only whether an in-flight OSC-11 detection just
+// resolved (m.themeDetectPending) differs between the two callers, since a
+// mode-2031 push carries its own definitive dark/light answer directly and
+// has no query/response round trip for that flag to guard.
+func (m Model) applyPalette(isDark bool) Model {
+	m.pal = theme.Resolve(m.themeMode, isDark)
+	applyTextareaTheme(&m.input, m.pal)
+	// Detection resolved before defaultBannerTimeout's fallback fired — the
+	// common case (see Init's doc comment) — so this is where the startup
+	// banner actually gets its correct, final palette.
+	m.showBannerOnce()
+	m.refreshViewport()
+	return m
+}
+
+// applyColorSchemePush handles a DEC mode 2031 push (issue #203, docs/adr/
+// 0018): applyPalette, gated the same way as Init's enabling of the push.
+// The gate is repeated here defensively even though a terminal can't send
+// this event unless enableColorSchemePushCmd already fired (which only
+// happens in "auto" mode) — same reasoning as Update's FocusMsg case
+// re-checking themeIsAuto.
+func (m Model) applyColorSchemePush(isDark bool) Model {
+	if !m.themeIsAuto() {
+		return m
+	}
+	return m.applyPalette(isDark)
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -469,15 +553,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.BackgroundColorMsg:
-		m.pal = theme.Resolve(m.themeMode, msg.IsDark())
+		m = m.applyPalette(msg.IsDark())
 		m.themeDetectPending = false
-		applyTextareaTheme(&m.input, m.pal)
-		// Detection resolved before defaultBannerTimeout's fallback fired —
-		// the common case (see Init's doc comment) — so this is where the
-		// startup banner actually gets its correct, final palette.
-		m.showBannerOnce()
-		m.refreshViewport()
 		return m, nil
+
+	case uv.DarkColorSchemeEvent:
+		return m.applyColorSchemePush(true), nil
+
+	case uv.LightColorSchemeEvent:
+		return m.applyColorSchemePush(false), nil
 
 	case tea.FocusMsg:
 		// Live theme re-detection (issue #103, ADR-0010): the terminal
@@ -651,7 +735,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m, m.quitCmd()
 	case "esc":
 		m.cancelTurn()
 		return m, nil
@@ -844,7 +928,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	// two together mechanically.
 	switch text {
 	case "/quit":
-		return m, tea.Quit
+		return m, m.quitCmd()
 	case "/clear":
 		endSession(m.loop)
 		m.sess.Clear()
