@@ -511,12 +511,19 @@ func (m Model) themeRequeryCmd() tea.Cmd {
 // applyPalette resolves isDark into a theme.Palette and applies it: the
 // shared shape behind both Update's tea.BackgroundColorMsg case (issue #103,
 // an OSC-11 reply) and applyColorSchemePush (issue #203, a DEC mode 2031
-// push, docs/adr/0018) — only whether an in-flight OSC-11 detection just
-// resolved (m.themeDetectPending) differs between the two callers, since a
-// mode-2031 push carries its own definitive dark/light answer directly and
-// has no query/response round trip for that flag to guard.
+// push, docs/adr/0018). Either caller's answer is treated as definitive, so
+// this always clears themeDetectPending too — including when a push
+// resolves while an unrelated focus-triggered OSC-11 re-query is still in
+// flight (issue #203's own field-diagnosis finding): the push already has a
+// trustworthy answer, so there's no reason to keep withholding
+// View().BackgroundColor until that older, stale round trip replies: when
+// it eventually does, a terminal's OSC-11 GET just echoes back the most
+// recently painted color, so it re-confirms whatever this already set —
+// no poisoning risk, unlike the query this flag actually guards against
+// (see themeDetectPending's doc comment on Model).
 func (m Model) applyPalette(isDark bool) Model {
 	m.pal = theme.Resolve(m.themeMode, isDark)
+	m.themeDetectPending = false
 	applyTextareaTheme(&m.input, m.pal)
 	// Detection resolved before defaultBannerTimeout's fallback fired — the
 	// common case (see Init's doc comment) — so this is where the startup
@@ -554,7 +561,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.BackgroundColorMsg:
 		m = m.applyPalette(msg.IsDark())
-		m.themeDetectPending = false
 		return m, nil
 
 	case uv.DarkColorSchemeEvent:

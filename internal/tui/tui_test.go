@@ -734,6 +734,44 @@ func TestUpdateColorSchemePushAppliesPaletteInAutoMode(t *testing.T) {
 	}
 }
 
+// TestColorSchemePushClearsInFlightDetectPending covers a gap found while
+// diagnosing issue #203 in the field: a mode-2031 push arriving while an
+// unrelated focus-triggered OSC-11 re-query (issue #103) is still in
+// flight must resume painting immediately rather than staying withheld
+// until that stale query's reply arrives. The push already carries a
+// trustworthy, definitive answer — there's no reason for it to wait on an
+// older round trip it didn't start; when that stale reply eventually
+// arrives, it just re-confirms whatever the push already set (a terminal's
+// OSC-11 GET echoes back the most recently painted color, so no harm, no
+// poisoning — see themeDetectPending's doc comment on Model).
+func TestColorSchemePushClearsInFlightDetectPending(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil).WithCwd("/cwd")
+	m.width, m.height = 80, 24
+	m.themeRequeryDelay = 0
+	m.bannerTimeout = 0
+
+	// Resolve initial detection, then a focus event puts a re-query in
+	// flight (themeDetectPending withholds View().BackgroundColor).
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.Black})
+	m = next.(Model)
+	next, _ = m.Update(tea.FocusMsg{})
+	m = next.(Model)
+	if !m.themeDetectPending {
+		t.Fatal("themeDetectPending = false right after FocusMsg, want true (test's own premise)")
+	}
+
+	// The mode-2031 push arrives before that re-query's own reply does.
+	next, _ = m.Update(uv.LightColorSchemeEvent{})
+	m = next.(Model)
+
+	if m.themeDetectPending {
+		t.Error("themeDetectPending = true after a mode-2031 push, want false: the push already answered definitively, so painting should resume immediately rather than wait on the stale in-flight re-query")
+	}
+	if got := m.View().BackgroundColor; got == nil {
+		t.Error("View().BackgroundColor = nil after a mode-2031 push resolved during an in-flight re-query, want painting to resume with the push's palette")
+	}
+}
+
 // TestUpdateColorSchemePushNoOpInExplicitThemeMode mirrors
 // TestUpdateFocusMsgNoOpInExplicitThemeMode for the mode-2031 push path: an
 // explicit dark/light override means the user opted out of detection
