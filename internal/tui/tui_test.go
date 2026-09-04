@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/mgoodness/liam/internal/agent"
@@ -210,8 +211,23 @@ func TestSubmitSlashQuitReturnsQuitCmd(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("submit(\"/quit\") returned a nil cmd, want tea.Quit")
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Errorf("submit(\"/quit\") cmd produced %#v, want tea.QuitMsg", cmd())
+	// config.Config{}'s default theme.mode ("") is "auto", so quitCmd
+	// sequences its mode-2031 teardown (issue #203, docs/adr/0018) ahead of
+	// tea.Quit rather than returning tea.Quit alone — see
+	// TestQuitCmdDisablesColorSchemePushInAutoMode for that sequence's own
+	// dedicated ordering coverage.
+	steps, ok := sequenceSteps(cmd())
+	if !ok {
+		t.Fatalf("submit(\"/quit\") cmd produced %#v, want a tea.Sequence (mode-2031 disable, then tea.Quit)", cmd())
+	}
+	var sawQuit bool
+	for _, step := range steps {
+		if _, ok := step().(tea.QuitMsg); ok {
+			sawQuit = true
+		}
+	}
+	if !sawQuit {
+		t.Error("submit(\"/quit\") cmd's sequence didn't include tea.QuitMsg")
 	}
 }
 
@@ -624,6 +640,200 @@ func TestFocusTriggeredReQueryChangesActiveTheme(t *testing.T) {
 	}
 	if mm.themeDetectPending {
 		t.Error("themeDetectPending = true after BackgroundColorMsg, want false so View() resumes painting")
+	}
+}
+
+// batchIncludesRaw reports whether any Cmd in batch produces a
+// tea.RawMsg wrapping want — the shape tea.Raw(...) commands resolve to
+// (issue #203, docs/adr/0018).
+func batchIncludesRaw(batch tea.BatchMsg, want string) bool {
+	for _, c := range batch {
+		if raw, ok := c().(tea.RawMsg); ok && raw.Msg == want {
+			return true
+		}
+	}
+	return false
+}
+
+// sequenceSteps extracts a tea.Sequence(...)'s underlying []tea.Cmd via
+// reflection: Bubbletea's sequenceMsg is an unexported named type
+// (`type sequenceMsg []Cmd`), so a test outside package tea can't
+// type-assert against it directly — but its element type, tea.Cmd, is
+// exported, so reflect.Value.Index(i).Interface() still yields a usable
+// tea.Cmd (mirrors isBackgroundColorRequestMsg's reflect-based sentinel
+// check above). Used by quitCmd's tests to confirm strict ordering
+// (mode-2031 disable, then tea.Quit) — the entire reason quitCmd uses
+// tea.Sequence instead of tea.Batch (see its own doc comment).
+func sequenceSteps(msg tea.Msg) ([]tea.Cmd, bool) {
+	if reflect.TypeOf(msg).String() != "tea.sequenceMsg" {
+		return nil, false
+	}
+	v := reflect.ValueOf(msg)
+	steps := make([]tea.Cmd, v.Len())
+	for i := range steps {
+		steps[i] = v.Index(i).Interface().(tea.Cmd)
+	}
+	return steps, true
+}
+
+// TestInitEnablesColorSchemePushInAutoModeOnly covers issue #203/docs/adr/
+// 0018's second, independent live re-detection path: Init sends the DEC
+// mode 2031 enable sequence once per session, gated identically to the
+// existing OSC-11 startup query — only under theme.mode "auto" (including
+// unset/""), never under an explicit dark/light override.
+func TestInitEnablesColorSchemePushInAutoModeOnly(t *testing.T) {
+	for mode, wantEnabled := range map[string]bool{"auto": true, "": true, "dark": false, "light": false} {
+		noTimer := 0
+		m := New(agent.Loop{}, config.Config{
+			Theme:      config.ThemeConfig{Mode: mode},
+			StatusLine: config.StatusLineConfig{RefreshInterval: &noTimer}, // avoid a real 1s sleep when the test invokes cmd() below
+		}, nil)
+		m.statusDebounce = 0    // avoid a real 300ms sleep
+		m.bannerTimeout = 0     // avoid a real 300ms sleep (auto mode's bannerTimeoutCmd/themeDetectTimeoutCmd)
+		m.themeRequeryDelay = 0 // unused here, matches other Init tests' belt-and-suspenders overrides
+
+		cmd := m.Init()
+		if cmd == nil {
+			t.Fatalf("theme.mode=%q: Init() = nil", mode)
+		}
+		batch, ok := cmd().(tea.BatchMsg)
+		if !ok {
+			t.Fatalf("theme.mode=%q: Init() = %#v, want tea.BatchMsg", mode, cmd())
+		}
+		if got := batchIncludesRaw(batch, ansi.SetModeLightDark); got != wantEnabled {
+			t.Errorf("theme.mode=%q: Init()'s batch includes the mode-2031 enable sequence = %v, want %v", mode, got, wantEnabled)
+		}
+	}
+}
+
+// TestUpdateColorSchemePushAppliesPaletteInAutoMode covers the actual
+// re-detection: unlike tea.BackgroundColorMsg's OSC-11 reply, a DEC mode
+// 2031 push (issue #203, docs/adr/0018) carries its own definitive
+// dark/light answer directly, so applying it needs no follow-up Cmd and no
+// themeDetectPending withholding.
+func TestUpdateColorSchemePushAppliesPaletteInAutoMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    tea.Msg
+		wantDark bool
+	}{
+		{"dark push", uv.DarkColorSchemeEvent{}, true},
+		{"light push", uv.LightColorSchemeEvent{}, false},
+	}
+	for _, tt := range tests {
+		m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil)
+
+		next, cmd := m.Update(tt.event)
+		mm := next.(Model)
+		if cmd != nil {
+			t.Errorf("%s: Update cmd = %#v, want nil (a direct push needs no follow-up query)", tt.name, cmd)
+		}
+		if mm.pal.Dark != tt.wantDark {
+			t.Errorf("%s: pal.Dark = %v, want %v", tt.name, mm.pal.Dark, tt.wantDark)
+		}
+	}
+}
+
+// TestColorSchemePushClearsInFlightDetectPending covers a gap found while
+// diagnosing issue #203 in the field: a mode-2031 push arriving while an
+// unrelated focus-triggered OSC-11 re-query (issue #103) is still in
+// flight must resume painting immediately rather than staying withheld
+// until that stale query's reply arrives. The push already carries a
+// trustworthy, definitive answer — there's no reason for it to wait on an
+// older round trip it didn't start; when that stale reply eventually
+// arrives, it just re-confirms whatever the push already set (a terminal's
+// OSC-11 GET echoes back the most recently painted color, so no harm, no
+// poisoning — see themeDetectPending's doc comment on Model).
+func TestColorSchemePushClearsInFlightDetectPending(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil).WithCwd("/cwd")
+	m.width, m.height = 80, 24
+	m.themeRequeryDelay = 0
+	m.bannerTimeout = 0
+
+	// Resolve initial detection, then a focus event puts a re-query in
+	// flight (themeDetectPending withholds View().BackgroundColor).
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.Black})
+	m = next.(Model)
+	next, _ = m.Update(tea.FocusMsg{})
+	m = next.(Model)
+	if !m.themeDetectPending {
+		t.Fatal("themeDetectPending = false right after FocusMsg, want true (test's own premise)")
+	}
+
+	// The mode-2031 push arrives before that re-query's own reply does.
+	next, _ = m.Update(uv.LightColorSchemeEvent{})
+	m = next.(Model)
+
+	if m.themeDetectPending {
+		t.Error("themeDetectPending = true after a mode-2031 push, want false: the push already answered definitively, so painting should resume immediately rather than wait on the stale in-flight re-query")
+	}
+	if got := m.View().BackgroundColor; got == nil {
+		t.Error("View().BackgroundColor = nil after a mode-2031 push resolved during an in-flight re-query, want painting to resume with the push's palette")
+	}
+}
+
+// TestUpdateColorSchemePushNoOpInExplicitThemeMode mirrors
+// TestUpdateFocusMsgNoOpInExplicitThemeMode for the mode-2031 push path: an
+// explicit dark/light override means the user opted out of detection
+// entirely, so even a received push (which shouldn't happen in practice,
+// since enabling the push in the first place is gated the same way) must
+// leave the palette untouched.
+func TestUpdateColorSchemePushNoOpInExplicitThemeMode(t *testing.T) {
+	for _, mode := range []string{"dark", "light"} {
+		for _, event := range []tea.Msg{uv.DarkColorSchemeEvent{}, uv.LightColorSchemeEvent{}} {
+			m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: mode}}, nil)
+			wantPal := m.pal
+
+			next, cmd := m.Update(event)
+			mm := next.(Model)
+			if cmd != nil {
+				t.Errorf("theme.mode=%q: Update(%T) cmd = %#v, want nil", mode, event, cmd)
+			}
+			if mm.pal != wantPal {
+				t.Errorf("theme.mode=%q: pal = %+v after %T, want unchanged %+v (opted out via explicit override)", mode, mm.pal, event, wantPal)
+			}
+		}
+	}
+}
+
+// TestQuitCmdDisablesColorSchemePushInAutoMode covers quitCmd's teardown
+// half of issue #203/docs/adr/0018: tea.Raw's enable sequence gets no
+// automatic reset-on-exit from Bubbletea's renderer (unlike a View()
+// field), so liam must disable mode 2031 itself on quit — strictly before
+// tea.Quit, not merely alongside it (see quitCmd's own doc comment for why
+// a tea.Batch's no-ordering-guarantee would let this race and silently
+// drop the disable write).
+func TestQuitCmdDisablesColorSchemePushInAutoMode(t *testing.T) {
+	m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: "auto"}}, nil)
+
+	cmd := m.quitCmd()
+	steps, ok := sequenceSteps(cmd())
+	if !ok {
+		t.Fatalf("quitCmd() = %#v, want a tea.Sequence (mode-2031 disable, then tea.Quit)", cmd())
+	}
+	if len(steps) != 2 {
+		t.Fatalf("quitCmd()'s sequence has %d steps, want 2 (disable, then quit)", len(steps))
+	}
+	if raw, ok := steps[0]().(tea.RawMsg); !ok || raw.Msg != ansi.ResetModeLightDark {
+		t.Errorf("quitCmd()'s first step produced %#v, want the mode-2031 disable sequence", steps[0]())
+	}
+	if _, ok := steps[1]().(tea.QuitMsg); !ok {
+		t.Errorf("quitCmd()'s second step produced %#v, want tea.QuitMsg", steps[1]())
+	}
+}
+
+// TestQuitCmdOmitsColorSchemeDisableInExplicitThemeMode covers the opt-out
+// side: an explicit dark/light override means mode 2031 was never enabled
+// (TestInitEnablesColorSchemePushInAutoModeOnly), so there's nothing to
+// disable on quit — quitCmd should return tea.Quit directly, not a batch.
+func TestQuitCmdOmitsColorSchemeDisableInExplicitThemeMode(t *testing.T) {
+	for _, mode := range []string{"dark", "light"} {
+		m := New(agent.Loop{}, config.Config{Theme: config.ThemeConfig{Mode: mode}}, nil)
+
+		cmd := m.quitCmd()
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Errorf("theme.mode=%q: quitCmd()() = %#v, want tea.QuitMsg directly (nothing to disable)", mode, cmd())
+		}
 	}
 }
 
