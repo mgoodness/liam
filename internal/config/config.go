@@ -113,8 +113,9 @@ type StatusLineConfig struct {
 	// RefreshInterval adds a periodic timer refresh, in milliseconds,
 	// alongside the status block's other refresh triggers (session start,
 	// after each response, after each tool call) — every trigger,
-	// including this one, is debounced at 300ms. 0 (the default) disables
-	// the timer; a configured positive value below the 1s floor is raised
-	// to it (see statusline.RefreshInterval).
-	RefreshInterval int `json:"refreshInterval,omitempty"`
+	// including this one, is debounced at 300ms. nil (unset, the default)
+	// resolves to a 1s timer; an explicit 0 disables the timer entirely; a
+	// configured positive value below the 1s floor is raised to it (see
+	// statusline.RefreshInterval).
+	RefreshInterval *int `json:"refreshInterval,omitempty"`
 }

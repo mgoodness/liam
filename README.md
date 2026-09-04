@@ -106,7 +106,7 @@ your working directory (project), deep-merged global-then-project, with
   },
   "statusLine": {
     "command": "my-statusline.sh", // omit for the built-in status line
-    "refreshInterval": 1000,
+    "refreshInterval": 1000, // ms; omit for the 1s default, or set 0 to disable the timer
   },
 }
 ```

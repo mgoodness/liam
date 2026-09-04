@@ -3,10 +3,10 @@ package tui
 // This file holds the customizable statusLine (issue #60): a status block
 // rendered below the input line, as the screen's bottom footer (issue
 // #123), refreshed on session start, after each response, after each tool
-// call, and an optional timer — every trigger debounced at 300ms via
-// statusGen/statusRefreshMsg/statusRenderedMsg's generation check, so a
-// burst of triggers within the debounce window only actually runs the
-// (potentially external-process) render once.
+// call, and a periodic timer (1s by default, issue #146) — every trigger
+// debounced at 300ms via statusGen/statusRefreshMsg/statusRenderedMsg's
+// generation check, so a burst of triggers within the debounce window only
+// actually runs the (potentially external-process) render once.
 // Model's own fields, construction, and the Update/View integration
 // points this plugs into stay in tui.go, matching mention.go/history.go's
 // own split.
@@ -42,10 +42,10 @@ type statusRenderedMsg struct {
 	warn  string
 }
 
-// statusTimerMsg fires every statusline.RefreshInterval when
-// config.StatusLineConfig.RefreshInterval is configured, requesting
-// another refresh (itself still subject to the same debounce) and
-// rescheduling itself.
+// statusTimerMsg fires every statusline.RefreshInterval — 1s by default,
+// even when config.StatusLineConfig.RefreshInterval is unset (issue #146),
+// or the configured value otherwise — requesting another refresh (itself
+// still subject to the same debounce) and rescheduling itself.
 type statusTimerMsg struct{}
 
 // statusTick schedules gen's debounce tick, statusDebounce from now.
@@ -55,9 +55,10 @@ func (m Model) statusTick(gen int) tea.Cmd {
 	})
 }
 
-// scheduleStatusTimer schedules the next statusTimerMsg when
-// config.StatusLineConfig.RefreshInterval is configured; nil (no timer)
-// otherwise.
+// scheduleStatusTimer schedules the next statusTimerMsg: at
+// statusline.DefaultRefreshInterval when config.StatusLineConfig.
+// RefreshInterval is unset, at the configured interval when it isn't, or
+// nil (no timer) when explicitly configured to 0 or less.
 func (m Model) scheduleStatusTimer() tea.Cmd {
 	interval := statusline.RefreshInterval(m.statusCfg.RefreshInterval)
 	if interval <= 0 {
