@@ -16,6 +16,7 @@ import (
 
 	"github.com/mgoodness/liam/internal/config"
 	"github.com/mgoodness/liam/internal/shellrun"
+	"github.com/mgoodness/liam/internal/trace"
 )
 
 // Lifecycle identifies one of the 4 hook lifecycle points.
@@ -40,6 +41,12 @@ type Runner struct {
 	// (e.g. to stderr) without the Runner owning any particular logging
 	// destination.
 	Warn func(msg string)
+	// Trace, when non-nil, records issue #63's per-run audit line for every
+	// hook this Runner runs (see run) — separate from, and regardless of,
+	// any tool-call outcome line the caller (internal/agent's Loop.dispatch)
+	// records for the call a beforeTool hook gates. nil disables tracing
+	// (e.g. in tests that don't construct one), never the hooks themselves.
+	Trace *trace.Writer
 }
 
 // Decision is BeforeTool's verdict: whether a blocking hook denied the call,
@@ -50,6 +57,10 @@ type Decision struct {
 	// exit code, if stderr was empty), surfaced to the model as the tool
 	// result.
 	Reason string
+	// Source is the denying hook's Command, threaded through to Trace's
+	// per-tool-call "source" field by the caller. Empty when Blocked is
+	// false.
+	Source string
 }
 
 // SessionStart runs every configured sessionStart hook.
@@ -88,7 +99,7 @@ func (r *Runner) BeforeTool(ctx context.Context, name, argsJSON string) Decision
 			if reason == "" {
 				reason = fmt.Sprintf("blocked by hook %q (exit %d)", hc.Command, oc.exitCode)
 			}
-			return Decision{Blocked: true, Reason: reason}
+			return Decision{Blocked: true, Reason: reason, Source: hc.Command}
 		}
 	}
 	return Decision{}
@@ -154,8 +165,20 @@ type outcome struct {
 }
 
 // run executes hc's command as a child process, feeding it lc's stdin JSON
-// payload and parallel LIAM_* environment variables.
-func (r *Runner) run(ctx context.Context, hc config.HookConfig, lc Lifecycle, ti *toolInfo, ri *resultInfo) outcome {
+// payload and parallel LIAM_* environment variables. Every call — success,
+// denial, or fail-open condition alike — records issue #63's HookRunLine via
+// r.Trace, via the deferred closure below: `return outcome{...}` still
+// assigns the named oc result before the deferred func runs, so every one of
+// run's early-return branches is covered without repeating the trace call at
+// each one.
+func (r *Runner) run(ctx context.Context, hc config.HookConfig, lc Lifecycle, ti *toolInfo, ri *resultInfo) (oc outcome) {
+	start := time.Now()
+	defer func() {
+		if r.Trace != nil {
+			r.Trace.WriteHookRun(string(lc), hc.Command, oc.exitCode, time.Since(start), oc.stderr)
+		}
+	}()
+
 	payload := struct {
 		Lifecycle string      `json:"lifecycle"`
 		SessionID string      `json:"sessionId"`
@@ -184,25 +207,25 @@ func (r *Runner) run(ctx context.Context, hc config.HookConfig, lc Lifecycle, ti
 	res := shellrun.Run(runCtx, hc.Command, stdin, r.Cwd, envFor(lc, r.SessionID, r.Cwd, ti))
 
 	if runCtx.Err() != nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-		return outcome{err: fmt.Errorf("timed out after %dms", hc.TimeoutMs)}
+		return outcome{exitCode: res.ExitCode, stderr: res.Stderr, err: fmt.Errorf("timed out after %dms", hc.TimeoutMs)}
 	}
 	if res.Err != nil {
-		// Couldn't even start sh itself.
-		return outcome{err: res.Err}
+		// Couldn't even start sh itself — no real exit code to report.
+		return outcome{exitCode: -1, err: res.Err}
 	}
 	// sh's own 127/126 convention for "command not found"/"found but not
 	// executable" is itself a fail-open condition (ADR-0002's "whose
 	// command can't be found"), not a policy verdict — sh never got to
 	// run the configured command at all.
 	if code := res.ExitCode; code == 127 || code == 126 {
-		return outcome{err: fmt.Errorf("command not found or not executable (exit %d): %s", code, strings.TrimSpace(res.Stderr))}
+		return outcome{exitCode: res.ExitCode, stderr: res.Stderr, err: fmt.Errorf("command not found or not executable (exit %d): %s", code, strings.TrimSpace(res.Stderr))}
 	}
 	// ExitCode() reports -1 when the process was terminated by a signal
 	// rather than returning normally (os/exec's documented behavior) —
 	// ADR-0002's "crashes before exiting" fail-open case, not a policy
 	// verdict.
 	if res.ExitCode == -1 {
-		return outcome{err: fmt.Errorf("hook process terminated abnormally: %s", strings.TrimSpace(res.Stderr))}
+		return outcome{exitCode: -1, stderr: res.Stderr, err: fmt.Errorf("hook process terminated abnormally: %s", strings.TrimSpace(res.Stderr))}
 	}
 	// Otherwise the process ran and returned — a non-zero exit is a real
 	// verdict, not a fail-open condition.

@@ -263,8 +263,12 @@ func New(loop agent.Loop, cfg config.Config, skills []skill.Skill) Model {
 	return m
 }
 
-// startSession points loop.Hooks (if set) at sess and fires sessionStart.
+// startSession points loop.Trace (if set) and loop.Hooks (if set) at sess,
+// and fires loop.Hooks' sessionStart.
 func startSession(loop agent.Loop, sess *session.Session) {
+	if loop.Trace != nil {
+		loop.Trace.SessionID = sess.ID
+	}
 	if loop.Hooks == nil {
 		return
 	}

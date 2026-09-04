@@ -24,6 +24,10 @@ _Avoid_: tool list, capabilities.
 A shell command the harness runs synchronously at a defined lifecycle point (e.g. before a tool executes, after a session ends), configured by the user. No model involvement.
 _Avoid_: plugin, callback, trigger.
 
+**Trace**:
+The harness-native, always-on, unconfigurable per-session audit log: one JSONL line for every tool call's outcome and every Hook run, written to `$XDG_STATE_HOME/liam/traces/<session-id>.jsonl`. Not itself a Hook — invoked directly by the agent loop's tool-dispatch path and the Hook runner, asynchronously and best-effort, so a slow disk never blocks or fails the call or Hook it's recording.
+_Avoid_: log (bare — ambiguous with e.g. stderr diagnostics), audit trail, telemetry.
+
 **Skill**:
 A packaged, on-demand set of instructions (markdown plus optional scripts, per the agentskills.io spec) that the model can choose to load mid-conversation to change how it approaches a specific kind of task.
 _Avoid_: hook, plugin, prompt.
