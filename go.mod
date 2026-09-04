@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/OpenRouterTeam/go-sdk v0.7.97
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/modelcontextprotocol/go-sdk v1.7.0

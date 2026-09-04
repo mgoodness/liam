@@ -45,8 +45,17 @@ func (Write) Run(_ context.Context, args map[string]any) Result {
 		return errorResult(`write: "content" argument is required`)
 	}
 
+	// Read whatever's there first so Result.Content can be a real diff
+	// against it (ADR-0015). Any read error (missing file, unreadable
+	// permissions, etc.) is treated the same as "no prior content" — the
+	// write below will surface a real permissions problem on its own.
+	var oldContent string
+	if data, err := os.ReadFile(path); err == nil {
+		oldContent = string(data)
+	}
+
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return errorResult(fmt.Sprintf("write %s: %v", path, err))
 	}
-	return Result{Content: fmt.Sprintf("wrote %d bytes to %s", len(content), path)}
+	return Result{Content: formatDiff(path, oldContent, content)}
 }

@@ -28,6 +28,11 @@ func TestWriteRunCreatesFile(t *testing.T) {
 	if body := readFile(t, path); body != "hello" {
 		t.Errorf("file content = %q, want %q", body, "hello")
 	}
+
+	wantDiff := "--- " + path + "\n+++ " + path + "\n@@ -0,0 +1 @@\n+hello\n\\ No newline at end of file\n"
+	if got.Content != wantDiff {
+		t.Errorf("Content = %q, want all-additions diff %q", got.Content, wantDiff)
+	}
 }
 
 func TestWriteRunOverwritesExistingFile(t *testing.T) {
@@ -45,6 +50,11 @@ func TestWriteRunOverwritesExistingFile(t *testing.T) {
 	}
 	if body := readFile(t, path); body != "new" {
 		t.Errorf("file content = %q, want %q", body, "new")
+	}
+
+	wantDiff := "--- " + path + "\n+++ " + path + "\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"
+	if got.Content != wantDiff {
+		t.Errorf("Content = %q, want diff against prior content %q", got.Content, wantDiff)
 	}
 }
 

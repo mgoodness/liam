@@ -31,6 +31,11 @@ func TestEditRunReplacesUniqueMatch(t *testing.T) {
 	if body := readFile(t, path); body != "hello there" {
 		t.Errorf("file content = %q, want %q", body, "hello there")
 	}
+
+	wantDiff := "--- " + path + "\n+++ " + path + "\n@@ -1 +1 @@\n-hello world\n\\ No newline at end of file\n+hello there\n\\ No newline at end of file\n"
+	if got.Content != wantDiff {
+		t.Errorf("Content = %q, want unified diff %q", got.Content, wantDiff)
+	}
 }
 
 func TestEditRunNoMatch(t *testing.T) {
