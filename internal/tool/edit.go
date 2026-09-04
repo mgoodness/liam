@@ -75,5 +75,5 @@ func (Edit) Run(_ context.Context, args map[string]any) Result {
 	if err := os.WriteFile(path, []byte(updated), info.Mode().Perm()); err != nil {
 		return errorResult(fmt.Sprintf("edit %s: %v", path, err))
 	}
-	return Result{Content: fmt.Sprintf("edited %s", path)}
+	return Result{Content: formatDiff(path, content, updated)}
 }
