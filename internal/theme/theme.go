@@ -1,6 +1,7 @@
 // Package theme provides liam's Catppuccin Frappe (dark) and Latte (light)
-// palettes, and the startup-only auto-detection/override logic that picks
-// between them.
+// palettes, and the auto-detection/override logic that picks between them —
+// detected at startup and, under theme.mode "auto", re-detected live on
+// terminal focus (internal/tui, issue #103/ADR-0010).
 package theme
 
 // Palette is the subset of Catppuccin colors liam's TUI and headless output
@@ -27,7 +28,8 @@ var Latte = Palette{
 
 // Resolve picks Frappe or Latte given the config's theme.mode ("auto" or
 // empty, "dark", "light") and, for "auto", the detected background
-// darkness. Detection is startup-only and, per spec, defaults dark on
+// darkness. Called both at startup and, under "auto", again on each
+// terminal focus event (issue #103/ADR-0010); per spec it defaults dark on
 // failure — callers pass isDark=true when detection didn't produce a
 // definitive answer.
 func Resolve(mode string, isDark bool) Palette {

@@ -24,8 +24,10 @@ type ProviderConfig struct {
 // ThemeConfig configures theme selection.
 type ThemeConfig struct {
 	// Mode overrides theme auto-detection: "auto" (default, detected at
-	// startup via the terminal's background color), "dark" (Catppuccin
-	// Frappe), or "light" (Catppuccin Latte).
+	// startup via the terminal's background color and re-detected live on
+	// each terminal focus event — issue #103/ADR-0010), "dark" (Catppuccin
+	// Frappe), or "light" (Catppuccin Latte); either explicit override
+	// disables re-detection too.
 	Mode string `json:"mode,omitempty"`
 }
 

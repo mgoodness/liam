@@ -1,11 +1,13 @@
 // Package tui implements liam's interactive Bubbletea shell: the
 // stacked-stream layout (conversation scrollback with inline tool calls,
 // a bubbles/textarea input line), Catppuccin Frappe/Latte theming
-// auto-detected at startup, and the /quit, /clear, /skills, /compact,
-// /<skill-name>, Escape-cancel session commands wired to the agent loop's
-// context.Context cancellation. A fuzzy-matched popup (issue #137) suggests
-// slash commands as the user types one at the start of the input, purely
-// cosmetic — it never changes what a submitted "/..." actually dispatches to.
+// auto-detected at startup and re-detected live on terminal focus under
+// theme.mode "auto" (issue #103, docs/adr/0010), and the /quit, /clear,
+// /skills, /compact, /<skill-name>, Escape-cancel session commands wired to
+// the agent loop's context.Context cancellation. A fuzzy-matched popup
+// (issue #137) suggests slash commands as the user types one at the start
+// of the input, purely cosmetic — it never changes what a submitted "/..."
+// actually dispatches to.
 //
 // The customizable statusLine (issue #60) is a status block rendered below
 // the input line, as the screen's bottom footer (issue #123), refreshed on
@@ -343,7 +345,7 @@ var defaultBannerTimeout = 300 * time.Millisecond
 // once.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.statusTick(m.statusGen)}
-	if m.themeMode != "dark" && m.themeMode != "light" {
+	if m.themeIsAuto() {
 		cmds = append(cmds, tea.RequestBackgroundColor, m.bannerTimeoutCmd())
 	} else {
 		cmds = append(cmds, m.showBanner())
@@ -352,6 +354,15 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, t)
 	}
 	return tea.Batch(cmds...)
+}
+
+// themeIsAuto reports whether theme.mode is "auto" (the default, including
+// unset/""), as opposed to an explicit "dark"/"light" override — gating both
+// Init's startup detection and Update's focus-triggered re-detection (issue
+// #103, ADR-0010): an explicit override means the user has opted out of
+// detection entirely, so there's nothing to (re-)query.
+func (m Model) themeIsAuto() bool {
+	return m.themeMode != "dark" && m.themeMode != "light"
 }
 
 // showBanner builds a Cmd that immediately (no I/O, no delay) resolves to a
@@ -389,6 +400,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showBannerOnce()
 		m.refreshViewport()
 		return m, nil
+
+	case tea.FocusMsg:
+		// Live theme re-detection (issue #103, ADR-0010): the terminal
+		// regaining focus re-issues the same background-color query Init()
+		// sent at startup, so a mid-session OS/terminal theme change takes
+		// effect without a restart — no polling, purely event-driven off
+		// View's ReportFocus. themeIsAuto() gates this exactly like Init:
+		// an explicit dark/light override means no re-query.
+		if !m.themeIsAuto() {
+			return m, nil
+		}
+		return m, tea.RequestBackgroundColor
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -981,6 +1004,14 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.BackgroundColor = lipgloss.Color(m.pal.Base)
 	v.MouseMode = tea.MouseModeCellMotion
+	// Enables tea.FocusMsg (issue #103, ADR-0010's live theme re-detection),
+	// gated the same way as Update's FocusMsg case and Init's startup
+	// detection: an explicit dark/light override means the user has opted
+	// out of detection entirely, so there's no reason to ask the terminal
+	// for focus reports at all. No-ops inside tmux/screen unless they're
+	// configured to forward focus events, matching today's existing OSC-11
+	// no-op there.
+	v.ReportFocus = m.themeIsAuto()
 	// Offset the textarea's own cursor position by inputRow, the row the
 	// input actually starts on above (the viewport's fixed row count, the
 	// blank separator line, popupDialogHeight while a popup is active, and
