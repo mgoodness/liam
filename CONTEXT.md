@@ -24,6 +24,10 @@ _Avoid_: tool list, capabilities.
 A shell command the harness runs synchronously at a defined lifecycle point (e.g. after a tool executes, after a session ends), configured by the user. Purely observational — no Hook can gate or deny anything (see ADR-0004); a failed or misbehaving Hook is only ever logged. No model involvement.
 _Avoid_: plugin, callback, trigger.
 
+**Continuation guard**:
+An in-process Go callback on the agent loop, consulted only when a turn produces no tool calls, that may reject the model's own decision to stop and force another turn — unlike a Hook, it can gate, and it carries no subprocess or config surface at all. Bounded by a fixed per-invocation cap (`MaxContinuations`), enforced independently of whatever the guard itself decides. liam's shipped Continuation guard is a built-in heuristic: reject the stop as long as no write/edit-classified tool has run yet this invocation, up to that same cap.
+_Avoid_: hook, stop hook, callback (bare).
+
 **Trace**:
 The harness-native, always-on, unconfigurable per-session audit log: one JSONL line for every tool call's outcome and every Hook run, written to `$XDG_STATE_HOME/liam/traces/<session-id>.jsonl`. Not itself a Hook — invoked directly by the agent loop's tool-dispatch path and the Hook runner, asynchronously and best-effort, so a slow disk never blocks or fails the call or Hook it's recording.
 _Avoid_: log (bare — ambiguous with e.g. stderr diagnostics), audit trail, telemetry.

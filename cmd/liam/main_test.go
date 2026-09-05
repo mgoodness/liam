@@ -438,6 +438,51 @@ func TestRunHeadlessFiresAgentDoneHookOnceWithFinalPayload(t *testing.T) {
 	}
 }
 
+// TestRunHeadlessDefaultShouldContinueForcesExtraTurnWithoutAWrite covers
+// issue #210's concrete default guard, wired at run()'s real (non-test)
+// Loop-construction site, exercised here the same way this file's other
+// integration tests exercise hook wiring: construct the Loop directly
+// (agent.DefaultShouldContinue(registry), the same call run() makes) and
+// drive it through runHeadless, rather than the full run() (which would
+// need a real OPENROUTER_API_KEY and network access). A scripted turn that
+// only calls a read-classified built-in tool must force a second turn; one
+// that calls a write-classified tool must not.
+func TestRunHeadlessDefaultShouldContinueForcesExtraTurnWithoutAWrite(t *testing.T) {
+	cases := []struct {
+		name      string
+		tool      tool.Tool
+		wantCalls int
+	}{
+		{name: "read-only turn forces a second turn", tool: tool.Read{}, wantCalls: 3},
+		{name: "a write tool call accepts the stop", tool: tool.Write{}, wantCalls: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := tool.NewRegistry(tc.tool)
+			fp := &fakeProviderCallingTool{toolName: tc.tool.Name()}
+			loop := agent.Loop{
+				Provider: fp,
+				Tools:    registry,
+				// MaxContinuations: 1 makes the read case's second (still
+				// write-less) stop deterministic instead of climbing to
+				// the default cap of 3 — see continuation_test.go's
+				// identical reasoning in the agent package.
+				ShouldContinue:   agent.DefaultShouldContinue(registry),
+				MaxContinuations: 1,
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := runHeadless(loop, nil, config.Config{}, "hi", "", &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("runHeadless() = %d, want 0; stderr = %q", code, stderr.String())
+			}
+			if fp.calls != tc.wantCalls {
+				t.Errorf("Provider.Stream called %d times, want %d", fp.calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
 // isolateSkillDirs points HOME/XDG_CONFIG_HOME/XDG_STATE_HOME at fresh
 // temp dirs so skill discovery/trust tests never touch the real
 // developer machine's ~/.agents/skills or trust store, and returns the
