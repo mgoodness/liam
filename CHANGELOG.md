@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.2.0](https://github.com/mgoodness/liam/compare/v1.1.0...v1.2.0) (2026-09-05)
+
+
+### Features
+
+* **agent:** add loop-level Continuation guard to reject premature stops ([#212](https://github.com/mgoodness/liam/issues/212)) ([391b246](https://github.com/mgoodness/liam/commit/391b246446b80631d5c61e786b09cab193292e7d))
+* **hook:** add userPromptSubmit/agentDone, then trim blocking hooks ([#211](https://github.com/mgoodness/liam/issues/211)) ([be00554](https://github.com/mgoodness/liam/commit/be00554f75fcc2ff348238d4c7fc7a63bfc6469f))
+* **theme:** add DEC 2031 color-scheme push re-detection alongside focus events ([#207](https://github.com/mgoodness/liam/issues/207)) ([6148554](https://github.com/mgoodness/liam/commit/61485545be3865e4da24d1d4bf1370db52c0c1a9))
+* **theme:** re-detect terminal background on focus, not just at startup ([#201](https://github.com/mgoodness/liam/issues/201)) ([97ac37a](https://github.com/mgoodness/liam/commit/97ac37a0fcfb620ab489b6bc7153cfc777c0c718))
+* **tool:** render edit/write results as a real unified diff ([#208](https://github.com/mgoodness/liam/issues/208)) ([1921a3c](https://github.com/mgoodness/liam/commit/1921a3ca0defb5178166509bea3e053789e5412f))
+* **trace:** harness-native per-session JSONL audit log ([#63](https://github.com/mgoodness/liam/issues/63)) ([#200](https://github.com/mgoodness/liam/issues/200)) ([c8fa069](https://github.com/mgoodness/liam/commit/c8fa069ce2bc125339603e2474ba75143220e08a))
+
+
+### Bug Fixes
+
+* **instructions:** tell liam to keep going until the task is done ([#209](https://github.com/mgoodness/liam/issues/209)) ([9bd3197](https://github.com/mgoodness/liam/commit/9bd3197a6158bbd9bf4be7b7ef881dddb5b0dfb7))
+* **statusline:** default periodic refresh timer to 1s when unconfigured ([#198](https://github.com/mgoodness/liam/issues/198)) ([b2669fc](https://github.com/mgoodness/liam/commit/b2669fc8a3537c115693d2137d91c0dd5bbee8b4))
+* **theme:** stop OSC-11 background paint from poisoning its own detection query ([#205](https://github.com/mgoodness/liam/issues/205)) ([5ac3806](https://github.com/mgoodness/liam/commit/5ac3806657e7b0b1210925c5f0e063995d52148f))
+
 ## [1.1.0](https://github.com/mgoodness/liam/compare/v1.0.0...v1.1.0) (2026-09-03)
 
 
