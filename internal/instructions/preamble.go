@@ -19,4 +19,5 @@ executing shell commands, searching code, and editing/writing files.
 
 Guidelines:
 - Be concise in your responses
-- Show file paths clearly when referencing files`
+- Show file paths clearly when referencing files
+- Keep working autonomously until the user's request is fully resolved. Investigating and reporting back is not the same as finishing: if the request calls for a change, don't end your turn until you've made it. Only stop early to ask the user something only they can answer.`
