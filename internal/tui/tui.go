@@ -928,6 +928,21 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	// emptied input until the next keystroke recomputes it.
 	m.slash = slashState{}
 
+	// userPromptSubmit fires on the raw text exactly as typed, ahead of
+	// every one of liam's own pre-processing steps below (the reserved
+	// /quit /clear /skills /compact commands, skill force-activation, and
+	// ordinary chat messages alike) — a denying hook keeps this submission
+	// from reaching the model at all, surfaced directly in the transcript
+	// since there's no model turn to hand the reason to.
+	if m.loop.Hooks != nil {
+		if d := m.loop.Hooks.UserPromptSubmit(context.Background(), text); d.Blocked {
+			m.lines = append(m.lines, line{role: "user", text: text})
+			m.lines = append(m.lines, line{role: "system", text: fmt.Sprintf("Prompt blocked by hook: %s", d.Reason)})
+			m.refreshViewport()
+			return m, nil
+		}
+	}
+
 	// This switch is the actual dispatch table for the 4 reserved
 	// commands; builtinCommands (slashcommand.go) only mirrors these names
 	// for the popup and must be kept in sync by hand — nothing ties the

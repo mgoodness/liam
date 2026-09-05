@@ -25,8 +25,9 @@ MCP, and Agent Skills through a small number of well-chosen seams.
   with an optional per-server tool allow-list.
 - **Agent Skills** (agentskills.io) — model-driven progressive disclosure,
   project skills are trust-gated with a one-time prompt.
-- **Hooks** — `sessionStart`/`sessionEnd`/`beforeTool`/`afterTool`, each an
-  external command that can allow/deny (`beforeTool`) or just observe.
+- **Hooks** — `sessionStart`/`sessionEnd`/`userPromptSubmit`/`beforeTool`/
+  `afterTool`/`agentDone`, each an external command that can allow/deny
+  (`userPromptSubmit`, `beforeTool`) or just observe.
 - **Trace** — an always-on, unconfigurable per-session audit log of every
   tool call's outcome and every Hook run, written as JSONL to
   `$XDG_STATE_HOME/liam/traces/<session-id>.jsonl`.

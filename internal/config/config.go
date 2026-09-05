@@ -31,14 +31,16 @@ type ThemeConfig struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-// HooksConfig configures liam's 4 hook lifecycle points: sessionStart,
-// sessionEnd, beforeTool, afterTool. Each is an array of HookConfig entries,
-// run in declaration order.
+// HooksConfig configures liam's 6 hook lifecycle points: sessionStart,
+// sessionEnd, userPromptSubmit, beforeTool, afterTool, agentDone. Each is an
+// array of HookConfig entries, run in declaration order.
 type HooksConfig struct {
-	SessionStart []HookConfig `json:"sessionStart,omitempty"`
-	SessionEnd   []HookConfig `json:"sessionEnd,omitempty"`
-	BeforeTool   []HookConfig `json:"beforeTool,omitempty"`
-	AfterTool    []HookConfig `json:"afterTool,omitempty"`
+	SessionStart     []HookConfig `json:"sessionStart,omitempty"`
+	SessionEnd       []HookConfig `json:"sessionEnd,omitempty"`
+	UserPromptSubmit []HookConfig `json:"userPromptSubmit,omitempty"`
+	BeforeTool       []HookConfig `json:"beforeTool,omitempty"`
+	AfterTool        []HookConfig `json:"afterTool,omitempty"`
+	AgentDone        []HookConfig `json:"agentDone,omitempty"`
 }
 
 // HookConfig is one hook entry: a shell command run at its lifecycle point.
@@ -46,8 +48,9 @@ type HookConfig struct {
 	// Command is run via "sh -c". Required.
 	Command string `json:"command"`
 	// Match restricts a beforeTool/afterTool hook to the named tools;
-	// "*" or an empty Match matches every tool. Ignored by sessionStart/
-	// sessionEnd, which have no associated tool.
+	// "*" or an empty Match matches every tool. Ignored by
+	// sessionStart/sessionEnd/userPromptSubmit/agentDone, which have no
+	// associated tool.
 	Match []string `json:"match,omitempty"`
 	// TimeoutMs bounds how long the hook process may run before it's
 	// killed and treated as a fail-open timeout (ADR-0002). 0 means no

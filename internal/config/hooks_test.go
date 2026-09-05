@@ -3,7 +3,7 @@ package config
 import "testing"
 
 // TestLoadParsesHooksConfig covers issue #45's config surface: the hooks
-// section's 4 lifecycle-point arrays, each entry's command/match/timeoutMs/
+// section's 6 lifecycle-point arrays, each entry's command/match/timeoutMs/
 // async fields, loaded the same way Load loads everything else.
 func TestLoadParsesHooksConfig(t *testing.T) {
 	setupXDG(t)
@@ -11,8 +11,10 @@ func TestLoadParsesHooksConfig(t *testing.T) {
 	writeFile(t, cwd+"/liam.jsonc", `{
   "hooks": {
     "sessionStart": [{ "command": "echo starting" }],
+    "userPromptSubmit": [{ "command": "./gate.sh", "timeoutMs": 2000 }],
     "beforeTool": [{ "match": ["bash", "edit"], "command": "./check.sh", "timeoutMs": 5000 }],
-    "afterTool": [{ "match": ["*"], "command": "./log.sh", "async": true }]
+    "afterTool": [{ "match": ["*"], "command": "./log.sh", "async": true }],
+    "agentDone": [{ "command": "./record.sh", "async": true }]
   }
 }`)
 
@@ -46,5 +48,21 @@ func TestLoadParsesHooksConfig(t *testing.T) {
 
 	if len(cfg.Hooks.SessionEnd) != 0 {
 		t.Errorf("Hooks.SessionEnd = %+v, want none configured", cfg.Hooks.SessionEnd)
+	}
+
+	if len(cfg.Hooks.UserPromptSubmit) != 1 {
+		t.Fatalf("Hooks.UserPromptSubmit = %+v, want 1 entry", cfg.Hooks.UserPromptSubmit)
+	}
+	ups := cfg.Hooks.UserPromptSubmit[0]
+	if ups.Command != "./gate.sh" || ups.TimeoutMs != 2000 || ups.Async {
+		t.Errorf("Hooks.UserPromptSubmit[0] = %+v, want command=./gate.sh timeoutMs=2000 async=false", ups)
+	}
+
+	if len(cfg.Hooks.AgentDone) != 1 {
+		t.Fatalf("Hooks.AgentDone = %+v, want 1 entry", cfg.Hooks.AgentDone)
+	}
+	ad := cfg.Hooks.AgentDone[0]
+	if ad.Command != "./record.sh" || !ad.Async {
+		t.Errorf("Hooks.AgentDone[0] = %+v, want command=./record.sh async=true", ad)
 	}
 }

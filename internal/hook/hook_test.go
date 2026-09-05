@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mgoodness/liam/internal/config"
+	"github.com/mgoodness/liam/internal/provider"
 )
 
 // captureWarnings collects every Warn message under a mutex, safe for the
@@ -248,6 +249,171 @@ func TestRunReceivesStdinJSONAndLIAMEnvVars(t *testing.T) {
 	}
 }
 
+func TestUserPromptSubmitAllowsWhenNoHooksConfigured(t *testing.T) {
+	r := &Runner{}
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if d.Blocked {
+		t.Errorf("Decision = %+v, want not blocked", d)
+	}
+}
+
+func TestUserPromptSubmitAllowsOnZeroExit(t *testing.T) {
+	r := &Runner{Hooks: config.HooksConfig{
+		UserPromptSubmit: []config.HookConfig{{Command: "exit 0"}},
+	}}
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if d.Blocked {
+		t.Errorf("Decision = %+v, want not blocked", d)
+	}
+}
+
+func TestUserPromptSubmitBlocksOnNonZeroExitAndSurfacesStderr(t *testing.T) {
+	r := &Runner{Hooks: config.HooksConfig{
+		UserPromptSubmit: []config.HookConfig{{Command: `echo "no prompts about foo" >&2; exit 1`}},
+	}}
+	d := r.UserPromptSubmit(context.Background(), "tell me about foo")
+	if !d.Blocked {
+		t.Fatalf("Decision = %+v, want blocked", d)
+	}
+	if d.Reason != "no prompts about foo" {
+		t.Errorf("Reason = %q, want %q", d.Reason, "no prompts about foo")
+	}
+}
+
+func TestUserPromptSubmitFallsBackToExitCodeWhenStderrEmpty(t *testing.T) {
+	r := &Runner{Hooks: config.HooksConfig{
+		UserPromptSubmit: []config.HookConfig{{Command: "exit 3"}},
+	}}
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if !d.Blocked {
+		t.Fatalf("Decision = %+v, want blocked", d)
+	}
+	if !strings.Contains(d.Reason, "exit 3") {
+		t.Errorf("Reason = %q, want a mention of the exit code", d.Reason)
+	}
+}
+
+func TestUserPromptSubmitStopsAtFirstBlockingHook(t *testing.T) {
+	dir := t.TempDir()
+	secondRanPath := dir + "/second-ran"
+	r := &Runner{Hooks: config.HooksConfig{
+		UserPromptSubmit: []config.HookConfig{
+			{Command: "exit 1"},
+			{Command: "touch " + secondRanPath}, // must never run
+		},
+	}}
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if !d.Blocked {
+		t.Fatalf("Decision = %+v, want blocked by the first hook", d)
+	}
+	if fileExists(secondRanPath) {
+		t.Error("second hook ran after the first already blocked")
+	}
+}
+
+// TestUserPromptSubmitAsyncHookNeverBlocks covers async: true's
+// fire-and-forget contract: an async hook can't gate the submission it's
+// attached to, even when it would otherwise deny (non-zero exit).
+func TestUserPromptSubmitAsyncHookNeverBlocks(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	r := &Runner{Hooks: config.HooksConfig{
+		UserPromptSubmit: []config.HookConfig{{Command: "exit 1", Async: true}},
+	}}
+	r.Warn = func(string) { wg.Done() }
+
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if d.Blocked {
+		t.Errorf("Decision = %+v, want not blocked (async hook)", d)
+	}
+
+	waitOrTimeout(t, &wg)
+}
+
+// TestUserPromptSubmitFailsOpenOnCommandNotFound covers ADR-0002: a hook
+// whose command can't even be started fails open (allow) with a logged
+// warning, rather than blocking the prompt.
+func TestUserPromptSubmitFailsOpenOnCommandNotFound(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{UserPromptSubmit: []config.HookConfig{{Command: "/no/such/binary-liam-test"}}},
+		Warn:  cw.fn(),
+	}
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if d.Blocked {
+		t.Errorf("Decision = %+v, want not blocked (fail open)", d)
+	}
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
+// TestUserPromptSubmitFailsOpenOnTimeout covers ADR-0002's other fail-open
+// case: a hook that doesn't return within TimeoutMs fails open rather than
+// blocking the prompt.
+func TestUserPromptSubmitFailsOpenOnTimeout(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{UserPromptSubmit: []config.HookConfig{{Command: "sleep 5; exit 1", TimeoutMs: 50}}},
+		Warn:  cw.fn(),
+	}
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if d.Blocked {
+		t.Errorf("Decision = %+v, want not blocked (timeout fails open)", d)
+	}
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
+// TestUserPromptSubmitFailsOpenOnSignalKill covers ADR-0002's "crashes
+// before exiting" fail-open case for the new blocking lifecycle point, same
+// as TestBeforeToolFailsOpenOnSignalKill.
+func TestUserPromptSubmitFailsOpenOnSignalKill(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{UserPromptSubmit: []config.HookConfig{{Command: "kill -9 $$"}}},
+		Warn:  cw.fn(),
+	}
+	d := r.UserPromptSubmit(context.Background(), "hello")
+	if d.Blocked {
+		t.Errorf("Decision = %+v, want not blocked (signal kill fails open)", d)
+	}
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
+// TestUserPromptSubmitReceivesRawText asserts the hook's stdin JSON carries
+// the exact text passed in, under "prompt.text".
+func TestUserPromptSubmitReceivesRawText(t *testing.T) {
+	dir := t.TempDir()
+	outPath := dir + "/prompt-saw.json"
+	r := &Runner{Hooks: config.HooksConfig{
+		UserPromptSubmit: []config.HookConfig{{Command: "cat > " + outPath}},
+	}}
+	d := r.UserPromptSubmit(context.Background(), "/foo bar baz")
+	if d.Blocked {
+		t.Fatalf("Decision = %+v, want not blocked", d)
+	}
+
+	var stdin struct {
+		Lifecycle string `json:"lifecycle"`
+		Prompt    struct {
+			Text string `json:"text"`
+		} `json:"prompt"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, outPath)), &stdin); err != nil {
+		t.Fatalf("unmarshaling captured stdin: %v", err)
+	}
+	if stdin.Lifecycle != "userPromptSubmit" {
+		t.Errorf("stdin lifecycle = %q, want userPromptSubmit", stdin.Lifecycle)
+	}
+	if stdin.Prompt.Text != "/foo bar baz" {
+		t.Errorf("stdin.prompt.text = %q, want %q", stdin.Prompt.Text, "/foo bar baz")
+	}
+}
+
 func TestSessionStartAndSessionEndRunConfiguredHooks(t *testing.T) {
 	dir := t.TempDir()
 	startPath := dir + "/started"
@@ -302,6 +468,97 @@ func TestAfterToolReceivesResult(t *testing.T) {
 	}
 	if stdin.Result.Content != "some output" || !stdin.Result.IsError {
 		t.Errorf("stdin.result = %+v, want {some output true}", stdin.Result)
+	}
+}
+
+func TestAgentDoneNeverBlocksOnNonZeroExit(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{AgentDone: []config.HookConfig{{Command: "exit 1"}}},
+		Warn:  cw.fn(),
+	}
+	// AgentDone has no return value to assert "not blocked" on; the
+	// contract under test is simply that it runs to completion (doesn't
+	// panic or hang) and reports the failure via Warn.
+	r.AgentDone(context.Background(), "stop", "openrouter/auto", provider.Usage{InputTokens: 1})
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called for a failing agentDone hook")
+	}
+}
+
+// TestAgentDoneReceivesPayload asserts the hook's stdin JSON mirrors
+// DoneEvent's fields under "done".
+func TestAgentDoneReceivesPayload(t *testing.T) {
+	dir := t.TempDir()
+	outPath := dir + "/done-saw.json"
+	r := &Runner{Hooks: config.HooksConfig{
+		AgentDone: []config.HookConfig{{Command: "cat > " + outPath}},
+	}}
+	r.AgentDone(context.Background(), "stop", "openrouter/auto", provider.Usage{InputTokens: 10, OutputTokens: 20, CachedInputTokens: 3, CostUSD: 0.05})
+
+	var stdin struct {
+		Lifecycle string `json:"lifecycle"`
+		Done      struct {
+			FinishReason string         `json:"finishReason"`
+			ModelUsed    string         `json:"modelUsed"`
+			Usage        provider.Usage `json:"usage"`
+		} `json:"done"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, outPath)), &stdin); err != nil {
+		t.Fatalf("unmarshaling captured stdin: %v", err)
+	}
+	if stdin.Lifecycle != "agentDone" {
+		t.Errorf("stdin lifecycle = %q, want agentDone", stdin.Lifecycle)
+	}
+	want := struct {
+		FinishReason string
+		ModelUsed    string
+		Usage        provider.Usage
+	}{"stop", "openrouter/auto", provider.Usage{InputTokens: 10, OutputTokens: 20, CachedInputTokens: 3, CostUSD: 0.05}}
+	if stdin.Done.FinishReason != want.FinishReason || stdin.Done.ModelUsed != want.ModelUsed || stdin.Done.Usage != want.Usage {
+		t.Errorf("stdin.done = %+v, want %+v", stdin.Done, want)
+	}
+}
+
+// TestAgentDoneFailsOpenOnCommandNotFound covers ADR-0002 for the new
+// observer lifecycle point, same fail-open contract as the existing 4.
+func TestAgentDoneFailsOpenOnCommandNotFound(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{AgentDone: []config.HookConfig{{Command: "/no/such/binary-liam-test"}}},
+		Warn:  cw.fn(),
+	}
+	r.AgentDone(context.Background(), "stop", "", provider.Usage{})
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
+// TestAgentDoneFailsOpenOnTimeout covers ADR-0002's timeout fail-open case
+// for the new observer lifecycle point.
+func TestAgentDoneFailsOpenOnTimeout(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{AgentDone: []config.HookConfig{{Command: "sleep 5; exit 1", TimeoutMs: 50}}},
+		Warn:  cw.fn(),
+	}
+	r.AgentDone(context.Background(), "stop", "", provider.Usage{})
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
+// TestAgentDoneFailsOpenOnSignalKill covers ADR-0002's "crashes before
+// exiting" fail-open case for the new observer lifecycle point.
+func TestAgentDoneFailsOpenOnSignalKill(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{AgentDone: []config.HookConfig{{Command: "kill -9 $$"}}},
+		Warn:  cw.fn(),
+	}
+	r.AgentDone(context.Background(), "stop", "", provider.Usage{})
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
 	}
 }
 

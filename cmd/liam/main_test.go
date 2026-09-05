@@ -408,6 +408,73 @@ func TestRunHeadlessFiresSessionStartAndSessionEndHooks(t *testing.T) {
 	}
 }
 
+// TestRunHeadlessDeniedByUserPromptSubmitHookNeverCallsProvider covers
+// issue #102's userPromptSubmit lifecycle point in headless mode: a denying
+// hook must keep the prompt from ever reaching the provider, surfacing the
+// hook's stderr on stderr instead, with a non-zero exit code.
+func TestRunHeadlessDeniedByUserPromptSubmitHookNeverCallsProvider(t *testing.T) {
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		UserPromptSubmit: []config.HookConfig{{Command: `echo "no headless prompts" >&2; exit 1`}},
+	}}
+	fp := &countingProvider{}
+	loop := agent.Loop{Provider: fp, Hooks: hooks}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, nil, config.Config{}, "hi", "", &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("runHeadless() = 0, want non-zero (denied prompt)")
+	}
+	if fp.calls != 0 {
+		t.Errorf("Provider.Stream called %d times, want 0 (denied prompt never reaches the provider)", fp.calls)
+	}
+	if !strings.Contains(stderr.String(), "no headless prompts") {
+		t.Errorf("stderr = %q, want it to mention the hook's stderr", stderr.String())
+	}
+}
+
+// countingProvider records how many times Stream was called, standing in
+// for a real model backend in tests that assert a denied prompt never
+// reaches the provider at all.
+type countingProvider struct{ calls int }
+
+func (p *countingProvider) Name() string { return "counting" }
+func (p *countingProvider) Stream(context.Context, provider.Request) iter.Seq2[provider.Event, error] {
+	p.calls++
+	return func(yield func(provider.Event, error) bool) {
+		yield(provider.DoneEvent{FinishReason: "stop"}, nil)
+	}
+}
+
+// TestRunHeadlessFiresAgentDoneHookOnceWithFinalPayload covers issue #102's
+// agentDone lifecycle point in headless mode: it must fire exactly once,
+// carrying the turn's FinishReason/ModelUsed/Usage.
+func TestRunHeadlessFiresAgentDoneHookOnceWithFinalPayload(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "agent-done-saw.json")
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		AgentDone: []config.HookConfig{{Command: "cat >> " + outPath + "; echo"}},
+	}}
+	loop := agent.Loop{Provider: doneProvider{}, Hooks: hooks}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, nil, config.Config{}, "hi", "", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runHeadless() = %d, want 0; stderr = %q", code, stderr.String())
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("agentDone hook did not run: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("agentDone hook ran %d times, want exactly 1: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], `"finishReason":"stop"`) {
+		t.Errorf("captured stdin = %q, want finishReason=stop", lines[0])
+	}
+}
+
 // isolateSkillDirs points HOME/XDG_CONFIG_HOME/XDG_STATE_HOME at fresh
 // temp dirs so skill discovery/trust tests never touch the real
 // developer machine's ~/.agents/skills or trust store, and returns the
