@@ -89,6 +89,20 @@ type Loop struct {
 	// KeepRecentTurns overrides compact.DefaultKeepRecentTurns's sliding
 	// window size; <= 0 uses the default.
 	KeepRecentTurns int
+
+	// ShouldContinue, when non-nil, gates Run's no-more-tool-calls
+	// conclusion — see ContinuationGuard's doc comment (issue #210). nil (a
+	// Loop built directly, e.g. by most tests) leaves that branch's
+	// existing behavior byte-for-byte unchanged: the model's own decision
+	// to stop is always accepted.
+	ShouldContinue ContinuationGuard
+	// MaxContinuations caps how many times a single Run invocation accepts
+	// a ShouldContinue "keep going" verdict; once reached, Run accepts the
+	// next stop regardless of what ShouldContinue returns — the runaway
+	// guard against a badly-behaved (or perpetually-unsatisfied) guard
+	// looping forever. <= 0 uses defaultMaxContinuations, matching
+	// KeepRecentTurns's own convention. Ignored when ShouldContinue is nil.
+	MaxContinuations int
 }
 
 // Run sends req, dispatching any ToolCallEvents the Provider yields against
@@ -106,6 +120,20 @@ type Loop struct {
 func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provider.Event)) ([]provider.Message, error) {
 	messages := append([]provider.Message(nil), req.Messages...)
 	tools := toolDefs(l.Tools)
+	continuations := 0
+
+	// turnMessages accumulates everything appended during this Run
+	// invocation only, in parallel with messages — kept separate because
+	// messages can be rewritten mid-invocation by compaction
+	// (autoCompactIfNeeded/Compact), which would otherwise corrupt a
+	// len(req.Messages)-based boundary. ShouldContinue gets turnMessages,
+	// not messages, so its "what happened in this exchange" view stays
+	// accurate regardless of compaction.
+	var turnMessages []provider.Message
+	appendMessage := func(m provider.Message) {
+		messages = append(messages, m)
+		turnMessages = append(turnMessages, m)
+	}
 
 	for {
 		messages = l.autoCompactIfNeeded(ctx, messages, req.Model)
@@ -136,25 +164,37 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 			// "[interrupted]"/"[error: ...]" around whatever partial output
 			// survives here.
 			if tr.text != "" {
-				messages = append(messages, provider.Message{Role: "assistant", Content: tr.text})
+				appendMessage(provider.Message{Role: "assistant", Content: tr.text})
 			}
 			return messages, err
 		}
 
 		if len(tr.calls) == 0 {
 			if tr.text != "" {
-				messages = append(messages, provider.Message{Role: "assistant", Content: tr.text})
+				appendMessage(provider.Message{Role: "assistant", Content: tr.text})
+			}
+			if l.ShouldContinue != nil && continuations < l.maxContinuations() {
+				if reason, again := l.ShouldContinue(turnMessages, tr.done); again {
+					continuations++
+					if reason != "" {
+						appendMessage(provider.Message{Role: "user", Content: reason})
+					}
+					continue
+				}
 			}
 			// This is where the whole Agent loop invocation concludes — the
-			// model stopped requesting tools and control passes back to the
-			// caller — as opposed to every other streamTurn call inside this
-			// same Run, which just ends one turn in a longer tool-calling
-			// chain. agentDone fires exactly once per Run call, right here.
+			// model stopped requesting tools, ShouldContinue (if set)
+			// accepted that stop or the MaxContinuations cap was reached,
+			// and control passes back to the caller — as opposed to every
+			// other streamTurn call inside this same Run, which just ends
+			// one turn in a longer tool-calling chain. agentDone fires
+			// exactly once per Run call, right here — never on a turn
+			// ShouldContinue rejected.
 			l.agentDone(ctx, tr.done)
 			return messages, nil
 		}
 
-		messages = append(messages, provider.Message{
+		appendMessage(provider.Message{
 			Role:      "assistant",
 			Content:   tr.text,
 			ToolCalls: tr.calls,
@@ -170,7 +210,7 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 					IsError:  result.IsError,
 				})
 			}
-			messages = append(messages, provider.Message{
+			appendMessage(provider.Message{
 				Role:       "tool",
 				Content:    result.Content,
 				ToolCallID: call.ID,

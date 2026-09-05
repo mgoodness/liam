@@ -142,11 +142,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Warn:  func(msg string) { fmt.Fprintf(stderr, "Liam: %s\n", msg) },
 		Trace: tracer,
 	}
+	registry := tool.NewRegistry(tools...)
 	loop := agent.Loop{
 		Provider: p,
-		Tools:    tool.NewRegistry(tools...),
+		Tools:    registry,
 		Hooks:    hooks,
 		Trace:    tracer,
+		// Issue #210: reject a premature stop when no write/edit tool has
+		// run yet in this invocation. registry is a map (a reference
+		// type) that mcp.Merge later mutates in place, so MCP tools
+		// loaded after this point are classified correctly too.
+		ShouldContinue: agent.DefaultShouldContinue(registry),
 	}
 
 	// MCP tool loading starts now, in the background — liam stays usable
