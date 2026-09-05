@@ -21,15 +21,14 @@ import (
 )
 
 // Decision is a tool-call trace line's outcome, per the ticket's spec. There
-// is deliberately no "denied_by_permission" value — ADR-0004 removed liam's
-// built-in permission system entirely, so a tool call is only ever executed,
-// denied by a beforeTool hook, or errored.
+// is deliberately no "denied_by_permission" or "denied_by_hook" value —
+// ADR-0004 removed liam's built-in permission system and its beforeTool-hook
+// DIY alternative alike, so a tool call is only ever executed or errored.
 type Decision string
 
 const (
-	DecisionExecuted     Decision = "executed"
-	DecisionDeniedByHook Decision = "denied_by_hook"
-	DecisionErrored      Decision = "errored"
+	DecisionExecuted Decision = "executed"
+	DecisionErrored  Decision = "errored"
 )
 
 // stderrCap bounds a HookRunLine's Stderr field, matching the ticket's
@@ -49,12 +48,9 @@ type ToolCallLine struct {
 	// Intent is the model-supplied justification for this call (the
 	// ticket's required, schema-injected "intent" property — see
 	// internal/agent's withIntent), threaded through unconditionally, not
-	// just on denials/errors.
+	// just on errors.
 	Intent string `json:"intent,omitempty"`
-	// Source names the hook that produced a denied_by_hook Decision (empty
-	// otherwise).
-	Source string `json:"source,omitempty"`
-	// Reason holds the denial or error message, when present.
+	// Reason holds the error message, when present.
 	Reason string `json:"reason,omitempty"`
 	// DurationMs is set only when Decision is DecisionExecuted, per the
 	// ticket's "duration_ms (executed only)" criterion — a denied or errored
@@ -67,7 +63,7 @@ type ToolCallLine struct {
 // function — no I/O — precisely so it can be unit-tested as one (see the
 // ticket's "line construction/serialization as pure functions" acceptance
 // criterion), independent of Writer's asynchronous file-writing concern.
-func NewToolCallLine(now time.Time, sessionID, tool, sideEffect string, decision Decision, intent, source, reason string, duration time.Duration) ToolCallLine {
+func NewToolCallLine(now time.Time, sessionID, tool, sideEffect string, decision Decision, intent, reason string, duration time.Duration) ToolCallLine {
 	l := ToolCallLine{
 		Timestamp:  now,
 		SessionID:  sessionID,
@@ -75,7 +71,6 @@ func NewToolCallLine(now time.Time, sessionID, tool, sideEffect string, decision
 		SideEffect: sideEffect,
 		Decision:   decision,
 		Intent:     intent,
-		Source:     source,
 		Reason:     reason,
 	}
 	if decision == DecisionExecuted {
@@ -188,9 +183,9 @@ func New() *Writer {
 
 // WriteToolCall enqueues a ToolCallLine (see NewToolCallLine) built from its
 // arguments, tagged with w.SessionID at the moment of the call.
-func (w *Writer) WriteToolCall(tool, sideEffect string, decision Decision, intent, source, reason string, duration time.Duration) {
+func (w *Writer) WriteToolCall(tool, sideEffect string, decision Decision, intent, reason string, duration time.Duration) {
 	sessionID := w.SessionID
-	w.emit(sessionID, NewToolCallLine(time.Now().UTC(), sessionID, tool, sideEffect, decision, intent, source, reason, duration))
+	w.emit(sessionID, NewToolCallLine(time.Now().UTC(), sessionID, tool, sideEffect, decision, intent, reason, duration))
 }
 
 // WriteHookRun enqueues a HookRunLine (see NewHookRunLine) built from its

@@ -408,6 +408,36 @@ func TestRunHeadlessFiresSessionStartAndSessionEndHooks(t *testing.T) {
 	}
 }
 
+// TestRunHeadlessFiresAgentDoneHookOnceWithFinalPayload covers issue #102's
+// agentDone lifecycle point in headless mode: it must fire exactly once,
+// carrying the turn's FinishReason/ModelUsed/Usage.
+func TestRunHeadlessFiresAgentDoneHookOnceWithFinalPayload(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "agent-done-saw.json")
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		AgentDone: []config.HookConfig{{Command: "cat >> " + outPath + "; echo"}},
+	}}
+	loop := agent.Loop{Provider: doneProvider{}, Hooks: hooks}
+
+	var stdout, stderr bytes.Buffer
+	code := runHeadless(loop, nil, config.Config{}, "hi", "", &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runHeadless() = %d, want 0; stderr = %q", code, stderr.String())
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("agentDone hook did not run: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("agentDone hook ran %d times, want exactly 1: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], `"finishReason":"stop"`) {
+		t.Errorf("captured stdin = %q, want finishReason=stop", lines[0])
+	}
+}
+
 // isolateSkillDirs points HOME/XDG_CONFIG_HOME/XDG_STATE_HOME at fresh
 // temp dirs so skill discovery/trust tests never touch the real
 // developer machine's ~/.agents/skills or trust store, and returns the

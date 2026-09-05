@@ -23,14 +23,14 @@ import (
 // live *trace.Writer to both loop.Trace and loop.Hooks.Trace, point it at
 // the same session ID loop.Hooks itself uses, and Close it (draining
 // pending writes) before returning — leaving a readable JSONL file behind
-// recording the turn's tool call and the hook run that gated it.
+// recording the turn's tool call and the hook that observed it.
 func TestRunHeadlessWiresTraceToRealSessionFile(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
 
 	tracer := trace.New()
 	hooks := &hook.Runner{
-		Hooks: config.HooksConfig{BeforeTool: []config.HookConfig{{Command: "exit 0"}}},
+		Hooks: config.HooksConfig{AfterTool: []config.HookConfig{{Command: "exit 0"}}},
 		Trace: tracer,
 	}
 	ft := &fakeTracedTool{result: tool.Result{Content: "done"}}
@@ -69,7 +69,7 @@ func TestRunHeadlessWiresTraceToRealSessionFile(t *testing.T) {
 		if probe.Tool == "fake" {
 			sawToolCall = true
 		}
-		if probe.Lifecycle == "beforeTool" {
+		if probe.Lifecycle == "afterTool" {
 			sawHookRun = true
 		}
 	}
@@ -77,7 +77,7 @@ func TestRunHeadlessWiresTraceToRealSessionFile(t *testing.T) {
 		t.Errorf("lines = %v, want a ToolCallLine for the \"fake\" tool", lines)
 	}
 	if !sawHookRun {
-		t.Errorf("lines = %v, want a HookRunLine for the beforeTool hook", lines)
+		t.Errorf("lines = %v, want a HookRunLine for the afterTool hook", lines)
 	}
 }
 

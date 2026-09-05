@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -376,125 +377,6 @@ func TestRunPreservesPartialTextOnStreamError(t *testing.T) {
 	}
 }
 
-// TestRunBlockingBeforeToolHookDeniesCallWithoutRunningTool drives a real
-// hook.Runner configured with a stub "beforeTool" hook command (a tiny
-// inline shell script standing in for a user-authored policy hook) that
-// denies every call: the fake Tool must never run, and the hook's stderr
-// becomes the tool-role Result the model sees.
-func TestRunBlockingBeforeToolHookDeniesCallWithoutRunningTool(t *testing.T) {
-	ft := &fakeTool{name: "bash", result: tool.Result{Content: "should never run"}}
-	fp := &fakeProvider{turns: [][]provider.Event{
-		{
-			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{"command":"rm -rf /"}`},
-			provider.DoneEvent{FinishReason: "tool_calls"},
-		},
-		{
-			provider.DoneEvent{FinishReason: "stop"},
-		},
-	}}
-	hooks := &hook.Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: `echo "denied by policy" >&2; exit 1`}},
-	}}
-	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
-
-	got, err := l.Run(context.Background(), provider.Request{}, nil)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if ft.gotArg != nil {
-		t.Errorf("tool.Run was called (gotArg = %+v), want the blocking hook to prevent it", ft.gotArg)
-	}
-
-	var toolMsg *provider.Message
-	for i := range got {
-		if got[i].Role == "tool" {
-			toolMsg = &got[i]
-		}
-	}
-	if toolMsg == nil {
-		t.Fatalf("no tool-role message in %+v", got)
-	}
-	if toolMsg.Content != "denied by policy" {
-		t.Errorf("tool result Content = %q, want the blocking hook's stderr", toolMsg.Content)
-	}
-}
-
-// TestRunAllowingBeforeToolHookLetsToolRun covers the complementary case: a
-// beforeTool hook that exits 0 lets the call through normally.
-func TestRunAllowingBeforeToolHookLetsToolRun(t *testing.T) {
-	ft := &fakeTool{name: "bash", result: tool.Result{Content: "ran fine"}}
-	fp := &fakeProvider{turns: [][]provider.Event{
-		{
-			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{}`},
-			provider.DoneEvent{FinishReason: "tool_calls"},
-		},
-		{
-			provider.DoneEvent{FinishReason: "stop"},
-		},
-	}}
-	hooks := &hook.Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: "exit 0"}},
-	}}
-	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
-
-	got, err := l.Run(context.Background(), provider.Request{}, nil)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if ft.gotArg == nil {
-		t.Error("tool.Run was never called, want the allowing hook to let it through")
-	}
-
-	var toolMsg *provider.Message
-	for i := range got {
-		if got[i].Role == "tool" {
-			toolMsg = &got[i]
-		}
-	}
-	if toolMsg == nil || toolMsg.Content != "ran fine" {
-		t.Fatalf("messages = %+v, want the tool's own result", got)
-	}
-}
-
-// TestRunAsyncBeforeToolHookNeverBlocksToolCall covers async: true's
-// fire-and-forget contract reaching all the way through the agent loop: an
-// async beforeTool hook that would otherwise deny (non-zero exit) can't gate
-// the call it's attached to.
-func TestRunAsyncBeforeToolHookNeverBlocksToolCall(t *testing.T) {
-	ft := &fakeTool{name: "bash", result: tool.Result{Content: "ran anyway"}}
-	fp := &fakeProvider{turns: [][]provider.Event{
-		{
-			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{}`},
-			provider.DoneEvent{FinishReason: "tool_calls"},
-		},
-		{
-			provider.DoneEvent{FinishReason: "stop"},
-		},
-	}}
-	hooks := &hook.Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: "exit 1", Async: true}},
-	}}
-	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
-
-	got, err := l.Run(context.Background(), provider.Request{}, nil)
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if ft.gotArg == nil {
-		t.Error("tool.Run was never called, want an async hook to never block")
-	}
-
-	var toolMsg *provider.Message
-	for i := range got {
-		if got[i].Role == "tool" {
-			toolMsg = &got[i]
-		}
-	}
-	if toolMsg == nil || toolMsg.Content != "ran anyway" {
-		t.Fatalf("messages = %+v, want the tool's own result", got)
-	}
-}
-
 // TestRunAfterToolHookRunsOnceToolCompletes exercises the afterTool
 // lifecycle point end-to-end: a stub hook command writes to a temp file, and
 // the test asserts it ran only after (and because of) the dispatched tool
@@ -524,6 +406,63 @@ func TestRunAfterToolHookRunsOnceToolCompletes(t *testing.T) {
 
 	if _, err := os.Stat(ranPath); err != nil {
 		t.Errorf("afterTool hook did not run: %v", err)
+	}
+}
+
+// TestRunAgentDoneHookFiresOnceWithFinalPayload exercises the agentDone
+// lifecycle point end-to-end: across a multi-turn Run (one tool-calling turn
+// followed by the concluding turn), the hook must run exactly once — not
+// once per streamTurn call — carrying the concluding turn's own
+// FinishReason/ModelUsed/Usage, not the intermediate tool_calls turn's.
+func TestRunAgentDoneHookFiresOnceWithFinalPayload(t *testing.T) {
+	dir := t.TempDir()
+	outPath := dir + "/agent-done-saw.json"
+
+	ft := &fakeTool{name: "bash", result: tool.Result{Content: "done"}}
+	fp := &fakeProvider{turns: [][]provider.Event{
+		{
+			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{}`},
+			provider.DoneEvent{FinishReason: "tool_calls", ModelUsed: "intermediate/model"},
+		},
+		{
+			provider.TextDeltaEvent{Text: "all done"},
+			provider.DoneEvent{FinishReason: "stop", ModelUsed: "final/model", Usage: provider.Usage{OutputTokens: 7}},
+		},
+	}}
+	hooks := &hook.Runner{Hooks: config.HooksConfig{
+		AgentDone: []config.HookConfig{{Command: "cat >> " + outPath + "; echo"}},
+	}}
+	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks}
+
+	if _, err := l.Run(context.Background(), provider.Request{}, nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("agentDone hook did not run: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("agentDone hook ran %d times, want exactly 1: %q", len(lines), lines)
+	}
+
+	var stdin struct {
+		Lifecycle string `json:"lifecycle"`
+		Done      struct {
+			FinishReason string         `json:"finishReason"`
+			ModelUsed    string         `json:"modelUsed"`
+			Usage        provider.Usage `json:"usage"`
+		} `json:"done"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &stdin); err != nil {
+		t.Fatalf("unmarshaling captured stdin %q: %v", lines[0], err)
+	}
+	if stdin.Lifecycle != "agentDone" {
+		t.Errorf("stdin lifecycle = %q, want agentDone", stdin.Lifecycle)
+	}
+	if stdin.Done.FinishReason != "stop" || stdin.Done.ModelUsed != "final/model" || stdin.Done.Usage.OutputTokens != 7 {
+		t.Errorf("stdin.done = %+v, want the concluding turn's own payload (stop/final/model/7)", stdin.Done)
 	}
 }
 

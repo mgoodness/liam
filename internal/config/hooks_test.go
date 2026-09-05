@@ -11,8 +11,8 @@ func TestLoadParsesHooksConfig(t *testing.T) {
 	writeFile(t, cwd+"/liam.jsonc", `{
   "hooks": {
     "sessionStart": [{ "command": "echo starting" }],
-    "beforeTool": [{ "match": ["bash", "edit"], "command": "./check.sh", "timeoutMs": 5000 }],
-    "afterTool": [{ "match": ["*"], "command": "./log.sh", "async": true }]
+    "afterTool": [{ "match": ["*"], "command": "./log.sh", "timeoutMs": 5000, "async": true }],
+    "agentDone": [{ "command": "./record.sh", "async": true }]
   }
 }`)
 
@@ -25,26 +25,23 @@ func TestLoadParsesHooksConfig(t *testing.T) {
 		t.Errorf("Hooks.SessionStart = %+v, want one hook running %q", cfg.Hooks.SessionStart, "echo starting")
 	}
 
-	if len(cfg.Hooks.BeforeTool) != 1 {
-		t.Fatalf("Hooks.BeforeTool = %+v, want 1 entry", cfg.Hooks.BeforeTool)
-	}
-	bt := cfg.Hooks.BeforeTool[0]
-	if bt.Command != "./check.sh" || bt.TimeoutMs != 5000 || bt.Async {
-		t.Errorf("Hooks.BeforeTool[0] = %+v, want command=./check.sh timeoutMs=5000 async=false", bt)
-	}
-	if len(bt.Match) != 2 || bt.Match[0] != "bash" || bt.Match[1] != "edit" {
-		t.Errorf("Hooks.BeforeTool[0].Match = %+v, want [bash edit]", bt.Match)
-	}
-
 	if len(cfg.Hooks.AfterTool) != 1 {
 		t.Fatalf("Hooks.AfterTool = %+v, want 1 entry", cfg.Hooks.AfterTool)
 	}
 	at := cfg.Hooks.AfterTool[0]
-	if at.Command != "./log.sh" || !at.Async || len(at.Match) != 1 || at.Match[0] != "*" {
-		t.Errorf("Hooks.AfterTool[0] = %+v, want command=./log.sh async=true match=[*]", at)
+	if at.Command != "./log.sh" || at.TimeoutMs != 5000 || !at.Async || len(at.Match) != 1 || at.Match[0] != "*" {
+		t.Errorf("Hooks.AfterTool[0] = %+v, want command=./log.sh timeoutMs=5000 async=true match=[*]", at)
 	}
 
 	if len(cfg.Hooks.SessionEnd) != 0 {
 		t.Errorf("Hooks.SessionEnd = %+v, want none configured", cfg.Hooks.SessionEnd)
+	}
+
+	if len(cfg.Hooks.AgentDone) != 1 {
+		t.Fatalf("Hooks.AgentDone = %+v, want 1 entry", cfg.Hooks.AgentDone)
+	}
+	ad := cfg.Hooks.AgentDone[0]
+	if ad.Command != "./record.sh" || !ad.Async {
+		t.Errorf("Hooks.AgentDone[0] = %+v, want command=./record.sh async=true", ad)
 	}
 }

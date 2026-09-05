@@ -49,9 +49,12 @@ const autoCompactThreshold = 0.85
 type Loop struct {
 	Provider provider.Provider
 	Tools    tool.Registry
-	// Hooks, when non-nil, gates and observes every tool call via its
-	// BeforeTool/AfterTool lifecycle points (see hook.Runner). nil means no
-	// hooks are configured.
+	// Hooks, when non-nil, observes every tool call via its AfterTool
+	// lifecycle point (see hook.Runner) and each whole Run invocation's
+	// conclusion via AgentDone (see agentDone). Every hook lifecycle point
+	// is a pure observer — none can gate or deny a tool call or anything
+	// else (see ADR-0004: liam has no tool-call gating mechanism of any
+	// kind). nil means no hooks are configured.
 	Hooks *hook.Runner
 	// Trace, when non-nil, records issue #63's per-call audit line for
 	// every tool call dispatch makes (see dispatch/traceToolCall). nil
@@ -111,7 +114,7 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 		turnReq.Messages = messages
 		turnReq.Tools = tools
 
-		text, calls, err := l.streamTurn(ctx, turnReq, onEvent)
+		tr, err := l.streamTurn(ctx, turnReq, onEvent)
 		if isContextTooLong(err) {
 			// Issue #54's ContextTooLong extension point: compact once and
 			// retry the same request exactly once — a fresh isRetryable
@@ -123,7 +126,7 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 			if recompacted, ok := l.Compact(ctx, messages, req.Model); ok {
 				messages = recompacted
 				turnReq.Messages = messages
-				text, calls, err = l.streamTurn(ctx, turnReq, onEvent)
+				tr, err = l.streamTurn(ctx, turnReq, onEvent)
 			}
 		}
 		if err != nil {
@@ -132,25 +135,31 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 			// discarding it; the caller marks the turn
 			// "[interrupted]"/"[error: ...]" around whatever partial output
 			// survives here.
-			if text != "" {
-				messages = append(messages, provider.Message{Role: "assistant", Content: text})
+			if tr.text != "" {
+				messages = append(messages, provider.Message{Role: "assistant", Content: tr.text})
 			}
 			return messages, err
 		}
 
-		if len(calls) == 0 {
-			if text != "" {
-				messages = append(messages, provider.Message{Role: "assistant", Content: text})
+		if len(tr.calls) == 0 {
+			if tr.text != "" {
+				messages = append(messages, provider.Message{Role: "assistant", Content: tr.text})
 			}
+			// This is where the whole Agent loop invocation concludes — the
+			// model stopped requesting tools and control passes back to the
+			// caller — as opposed to every other streamTurn call inside this
+			// same Run, which just ends one turn in a longer tool-calling
+			// chain. agentDone fires exactly once per Run call, right here.
+			l.agentDone(ctx, tr.done)
 			return messages, nil
 		}
 
 		messages = append(messages, provider.Message{
 			Role:      "assistant",
-			Content:   text,
-			ToolCalls: calls,
+			Content:   tr.text,
+			ToolCalls: tr.calls,
 		})
-		for _, call := range calls {
+		for _, call := range tr.calls {
 			result := l.dispatch(ctx, call)
 			if onEvent != nil {
 				onEvent(provider.ToolResultEvent{
@@ -182,34 +191,27 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 // dispatch runs the Tool named by call against l.Tools, reporting an error
 // Result for an unknown tool name or malformed argument JSON rather than
 // failing the loop — the model sees the failure and decides how to proceed.
-// When l.Hooks is set, a blocking beforeTool hook can deny the call before
-// the Tool ever runs (its stderr becomes the error Result the model sees),
-// and afterTool hooks observe every call that does run. Every outcome —
-// unknown tool, denied, invalid args, errored, or a clean run — records
-// issue #63's ToolCallLine via l.Trace (see traceToolCall).
+// When l.Hooks is set, afterTool hooks observe every call that runs, purely
+// as an observer — nothing can deny a call before it runs (ADR-0004: liam
+// has no tool-call gating mechanism). Every outcome — unknown tool, invalid
+// args, errored, or a clean run — records issue #63's ToolCallLine via
+// l.Trace (see traceToolCall).
 func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result {
 	intent := extractIntent(call.ArgsJSON)
 
 	t, ok := l.Tools[call.Name]
 	if !ok {
 		reason := fmt.Sprintf("unknown tool %q", call.Name)
-		l.traceToolCall(call.Name, "", trace.DecisionErrored, intent, "", reason, 0)
+		l.traceToolCall(call.Name, "", trace.DecisionErrored, intent, reason, 0)
 		return tool.Result{Content: reason, IsError: true}
 	}
 	sideEffect := string(t.Safety().SideEffect)
-
-	if l.Hooks != nil {
-		if d := l.Hooks.BeforeTool(ctx, call.Name, call.ArgsJSON); d.Blocked {
-			l.traceToolCall(call.Name, sideEffect, trace.DecisionDeniedByHook, intent, d.Source, d.Reason, 0)
-			return tool.Result{Content: d.Reason, IsError: true}
-		}
-	}
 
 	var args map[string]any
 	if call.ArgsJSON != "" {
 		if err := json.Unmarshal([]byte(call.ArgsJSON), &args); err != nil {
 			reason := fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
-			l.traceToolCall(call.Name, sideEffect, trace.DecisionErrored, intent, "", reason, 0)
+			l.traceToolCall(call.Name, sideEffect, trace.DecisionErrored, intent, reason, 0)
 			return tool.Result{Content: reason, IsError: true}
 		}
 	}
@@ -230,7 +232,7 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 	if result.IsError {
 		decision, reason = trace.DecisionErrored, result.Content
 	}
-	l.traceToolCall(call.Name, sideEffect, decision, intent, "", reason, duration)
+	l.traceToolCall(call.Name, sideEffect, decision, intent, reason, duration)
 
 	return result
 }
@@ -238,11 +240,11 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 // traceToolCall records one ToolCallLine via l.Trace, a no-op when l.Trace
 // is nil (every real call site — cmd/liam/main.go — always sets it; nil
 // only covers tests that build a Loop directly without one).
-func (l Loop) traceToolCall(name, sideEffect string, decision trace.Decision, intent, source, reason string, duration time.Duration) {
+func (l Loop) traceToolCall(name, sideEffect string, decision trace.Decision, intent, reason string, duration time.Duration) {
 	if l.Trace == nil {
 		return
 	}
-	l.Trace.WriteToolCall(name, sideEffect, decision, intent, source, reason, duration)
+	l.Trace.WriteToolCall(name, sideEffect, decision, intent, reason, duration)
 }
 
 // streamTurn drives one or more Provider.Stream attempts for a single turn,
@@ -259,10 +261,11 @@ func (l Loop) traceToolCall(name, sideEffect string, decision trace.Decision, in
 // retried attempt is expected to fail before yielding any events in
 // practice (a provider-level retryable error surfaces before any content),
 // so this doesn't visibly leak a retried attempt's output.
-func (l Loop) streamTurn(ctx context.Context, req provider.Request, onEvent func(provider.Event)) (string, []provider.ToolCall, error) {
+func (l Loop) streamTurn(ctx context.Context, req provider.Request, onEvent func(provider.Event)) (turnResult, error) {
 	for attempt := 1; ; attempt++ {
 		var text strings.Builder
 		var calls []provider.ToolCall
+		var done provider.DoneEvent
 		var streamErr error
 
 		for ev, err := range l.Provider.Stream(ctx, req) {
@@ -278,19 +281,52 @@ func (l Loop) streamTurn(ctx context.Context, req provider.Request, onEvent func
 				text.WriteString(e.Text)
 			case provider.ToolCallEvent:
 				calls = append(calls, provider.ToolCall{ID: e.ID, Name: e.Name, ArgsJSON: e.ArgsJSON})
+			case provider.DoneEvent:
+				done = e
 			}
 		}
+		tr := turnResult{text: text.String(), calls: calls, done: done}
 
 		if streamErr == nil {
-			return text.String(), calls, nil
+			return tr, nil
 		}
 		if attempt >= maxStreamAttempts || !isRetryable(streamErr) {
-			return text.String(), calls, streamErr
+			return tr, streamErr
 		}
 		if err := waitBackoff(ctx, l.backoffDelay(attempt)); err != nil {
-			return text.String(), calls, err
+			return tr, err
 		}
 	}
+}
+
+// turnResult bundles one streamTurn call's accumulated output: the text
+// streamed, the tool calls requested, and the terminating DoneEvent (used by
+// Run to build agentDone's payload once the whole loop concludes). Kept as
+// one value, rather than three separate return values, since all three
+// always travel together across Run's retry-then-recompact logic and its
+// two outcome branches (error vs. no-more-tool-calls).
+type turnResult struct {
+	text  string
+	calls []provider.ToolCall
+	done  provider.DoneEvent
+}
+
+// agentDone dispatches l.Hooks' agentDone lifecycle point, a no-op when
+// l.Hooks is nil. This is the single call site marking a whole Agent loop
+// invocation's conclusion (Run's no-more-tool-calls return) — never fired
+// per individual streamTurn call within a multi-tool-call turn, and
+// deliberately not fired on Run's other two return paths (a final
+// streamErr, or ctx.Err() after a tool call): those end the loop for
+// reasons outside the model's own judgment and carry no legitimate
+// DoneEvent to report, whereas the no-more-tool-calls path is exactly the
+// model's own decision to stop — the case issue #102 exists to let a hook
+// observe (and, per its own comment thread, eventually gate against a
+// premature stop).
+func (l Loop) agentDone(ctx context.Context, done provider.DoneEvent) {
+	if l.Hooks == nil {
+		return
+	}
+	l.Hooks.AgentDone(ctx, done.FinishReason, done.ModelUsed, done.Usage)
 }
 
 // isRetryable reports whether err is a *provider.ProviderError whose Kind
