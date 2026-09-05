@@ -25,3 +25,15 @@ func TestPreambleCarriesNoPermissionLanguage(t *testing.T) {
 		}
 	}
 }
+
+// TestPreambleDiscouragesPrematureStop guards against the model treating a
+// turn as finished once it's merely investigated/reported back, without
+// having made the change the request actually called for.
+func TestPreambleDiscouragesPrematureStop(t *testing.T) {
+	lower := strings.ToLower(Preamble)
+	for _, want := range []string{"until", "fully resolved"} {
+		if !strings.Contains(lower, want) {
+			t.Errorf("Preamble = %q, want it to contain %q (guard against ending a turn before the task is actually done)", Preamble, want)
+		}
+	}
+}
