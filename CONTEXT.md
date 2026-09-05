@@ -21,7 +21,7 @@ The tools active in a given session: the harness's built-in tools plus whatever 
 _Avoid_: tool list, capabilities.
 
 **Hook**:
-A shell command the harness runs synchronously at a defined lifecycle point (e.g. before a tool executes, after a session ends), configured by the user. No model involvement.
+A shell command the harness runs synchronously at a defined lifecycle point (e.g. after a tool executes, after a session ends), configured by the user. Purely observational — no Hook can gate or deny anything (see ADR-0004); a failed or misbehaving Hook is only ever logged. No model involvement.
 _Avoid_: plugin, callback, trigger.
 
 **Trace**:

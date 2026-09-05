@@ -25,9 +25,9 @@ MCP, and Agent Skills through a small number of well-chosen seams.
   with an optional per-server tool allow-list.
 - **Agent Skills** (agentskills.io) — model-driven progressive disclosure,
   project skills are trust-gated with a one-time prompt.
-- **Hooks** — `sessionStart`/`sessionEnd`/`userPromptSubmit`/`beforeTool`/
-  `afterTool`/`agentDone`, each an external command that can allow/deny
-  (`userPromptSubmit`, `beforeTool`) or just observe.
+- **Hooks** — `sessionStart`/`sessionEnd`/`afterTool`/`agentDone`, each an
+  external command run as a pure observer; none can gate or deny anything
+  (see "No built-in permission system" below).
 - **Trace** — an always-on, unconfigurable per-session audit log of every
   tool call's outcome and every Hook run, written as JSONL to
   `$XDG_STATE_HOME/liam/traces/<session-id>.jsonl`.
@@ -38,9 +38,9 @@ MCP, and Agent Skills through a small number of well-chosen seams.
   context limit, plus live context/cost tracking in the status line.
 - **Customizable status line** — the built-in one, or point `statusLine` at
   your own external command.
-- **No built-in permission system** — Liam runs tools with the harness
-  process's own OS permissions; if you want gating (confirm-before-shell,
-  deny-by-default, etc.), build it as a `beforeTool` Hook.
+- **No built-in permission system, and no hook-based gating either** — Liam
+  runs tools with the harness process's own OS permissions. There is
+  currently no tool-call gating mechanism of any kind (see ADR-0004).
 
 ## Install
 
@@ -90,7 +90,7 @@ your working directory (project), deep-merged global-then-project, with
   "provider": { "model": "openrouter/auto" },
   "theme": { "mode": "auto" }, // "auto" | "dark" | "light"
   "hooks": {
-    "beforeTool": [{ "command": "my-policy-check.sh", "match": ["bash"] }],
+    "afterTool": [{ "command": "my-audit-log.sh", "match": ["bash"] }],
   },
   "mcpServers": {
     "my-server": {

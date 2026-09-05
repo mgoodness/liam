@@ -408,43 +408,6 @@ func TestRunHeadlessFiresSessionStartAndSessionEndHooks(t *testing.T) {
 	}
 }
 
-// TestRunHeadlessDeniedByUserPromptSubmitHookNeverCallsProvider covers
-// issue #102's userPromptSubmit lifecycle point in headless mode: a denying
-// hook must keep the prompt from ever reaching the provider, surfacing the
-// hook's stderr on stderr instead, with a non-zero exit code.
-func TestRunHeadlessDeniedByUserPromptSubmitHookNeverCallsProvider(t *testing.T) {
-	hooks := &hook.Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: `echo "no headless prompts" >&2; exit 1`}},
-	}}
-	fp := &countingProvider{}
-	loop := agent.Loop{Provider: fp, Hooks: hooks}
-
-	var stdout, stderr bytes.Buffer
-	code := runHeadless(loop, nil, config.Config{}, "hi", "", &stdout, &stderr)
-	if code == 0 {
-		t.Fatal("runHeadless() = 0, want non-zero (denied prompt)")
-	}
-	if fp.calls != 0 {
-		t.Errorf("Provider.Stream called %d times, want 0 (denied prompt never reaches the provider)", fp.calls)
-	}
-	if !strings.Contains(stderr.String(), "no headless prompts") {
-		t.Errorf("stderr = %q, want it to mention the hook's stderr", stderr.String())
-	}
-}
-
-// countingProvider records how many times Stream was called, standing in
-// for a real model backend in tests that assert a denied prompt never
-// reaches the provider at all.
-type countingProvider struct{ calls int }
-
-func (p *countingProvider) Name() string { return "counting" }
-func (p *countingProvider) Stream(context.Context, provider.Request) iter.Seq2[provider.Event, error] {
-	p.calls++
-	return func(yield func(provider.Event, error) bool) {
-		yield(provider.DoneEvent{FinishReason: "stop"}, nil)
-	}
-}
-
 // TestRunHeadlessFiresAgentDoneHookOnceWithFinalPayload covers issue #102's
 // agentDone lifecycle point in headless mode: it must fire exactly once,
 // carrying the turn's FinishReason/ModelUsed/Usage.

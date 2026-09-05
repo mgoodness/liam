@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mgoodness/liam/internal/config"
-	"github.com/mgoodness/liam/internal/hook"
 	"github.com/mgoodness/liam/internal/provider"
 	"github.com/mgoodness/liam/internal/tool"
 	"github.com/mgoodness/liam/internal/trace"
@@ -49,52 +47,6 @@ func TestDispatchTracesNormalExecutionWithIntentAndDuration(t *testing.T) {
 	}
 	if ft.gotArg["intent"] != nil {
 		t.Errorf("tool.Run saw args %+v, want \"intent\" stripped before Run", ft.gotArg)
-	}
-}
-
-// TestDispatchTracesBeforeToolDenialAsDeniedByHookWithSource drives a real
-// hook.Runner configured with a stub denying beforeTool hook through Run,
-// and asserts the resulting ToolCallLine: decision=denied_by_hook, no
-// duration_ms, and Source naming the denying hook.
-func TestDispatchTracesBeforeToolDenialAsDeniedByHookWithSource(t *testing.T) {
-	tr, stateHome := tracetest.New(t, "sess-deny")
-	ft := &fakeTool{name: "bash", result: tool.Result{Content: "should never run"}}
-	fp := &fakeProvider{turns: [][]provider.Event{
-		{
-			provider.ToolCallEvent{ID: "call_1", Name: "bash", ArgsJSON: `{"command":"rm -rf /","intent":"cleanup"}`},
-			provider.DoneEvent{FinishReason: "tool_calls"},
-		},
-		{provider.DoneEvent{FinishReason: "stop"}},
-	}}
-	hooks := &hook.Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: `echo "denied by policy" >&2; exit 1`}},
-	}}
-	l := Loop{Provider: fp, Tools: tool.NewRegistry(ft), Hooks: hooks, Trace: tr}
-
-	if _, err := l.Run(context.Background(), provider.Request{}, nil); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	tr.Close()
-
-	lines := tracetest.ReadLines[trace.ToolCallLine](t, stateHome, "sess-deny")
-	if len(lines) != 1 {
-		t.Fatalf("len(lines) = %d, want 1: %+v", len(lines), lines)
-	}
-	l0 := lines[0]
-	if l0.Decision != trace.DecisionDeniedByHook {
-		t.Errorf("Decision = %q, want denied_by_hook", l0.Decision)
-	}
-	if l0.Reason != "denied by policy" {
-		t.Errorf("Reason = %q, want the denying hook's stderr", l0.Reason)
-	}
-	if l0.Source != `echo "denied by policy" >&2; exit 1` {
-		t.Errorf("Source = %q, want the denying hook's command", l0.Source)
-	}
-	if l0.Intent != "cleanup" {
-		t.Errorf("Intent = %q, want the model-supplied intent even on a denial", l0.Intent)
-	}
-	if l0.DurationMs != 0 {
-		t.Errorf("DurationMs = %d, want 0 (a denied call never ran)", l0.DurationMs)
 	}
 }
 

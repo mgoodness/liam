@@ -31,34 +31,33 @@ type ThemeConfig struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-// HooksConfig configures liam's 6 hook lifecycle points: sessionStart,
-// sessionEnd, userPromptSubmit, beforeTool, afterTool, agentDone. Each is an
-// array of HookConfig entries, run in declaration order.
+// HooksConfig configures liam's 4 hook lifecycle points: sessionStart,
+// sessionEnd, afterTool, agentDone. Each is an array of HookConfig entries,
+// run in declaration order. All 4 are pure observers — none can gate or
+// deny anything (see internal/hook's package doc; a blocking beforeTool/
+// userPromptSubmit contract shipped and was removed with zero real
+// configured usage).
 type HooksConfig struct {
-	SessionStart     []HookConfig `json:"sessionStart,omitempty"`
-	SessionEnd       []HookConfig `json:"sessionEnd,omitempty"`
-	UserPromptSubmit []HookConfig `json:"userPromptSubmit,omitempty"`
-	BeforeTool       []HookConfig `json:"beforeTool,omitempty"`
-	AfterTool        []HookConfig `json:"afterTool,omitempty"`
-	AgentDone        []HookConfig `json:"agentDone,omitempty"`
+	SessionStart []HookConfig `json:"sessionStart,omitempty"`
+	SessionEnd   []HookConfig `json:"sessionEnd,omitempty"`
+	AfterTool    []HookConfig `json:"afterTool,omitempty"`
+	AgentDone    []HookConfig `json:"agentDone,omitempty"`
 }
 
 // HookConfig is one hook entry: a shell command run at its lifecycle point.
 type HookConfig struct {
 	// Command is run via "sh -c". Required.
 	Command string `json:"command"`
-	// Match restricts a beforeTool/afterTool hook to the named tools;
-	// "*" or an empty Match matches every tool. Ignored by
-	// sessionStart/sessionEnd/userPromptSubmit/agentDone, which have no
-	// associated tool.
+	// Match restricts an afterTool hook to the named tools; "*" or an empty
+	// Match matches every tool. Ignored by sessionStart/sessionEnd/
+	// agentDone, which have no associated tool.
 	Match []string `json:"match,omitempty"`
 	// TimeoutMs bounds how long the hook process may run before it's
 	// killed and treated as a fail-open timeout (ADR-0002). 0 means no
 	// timeout.
 	TimeoutMs int `json:"timeoutMs,omitempty"`
 	// Async fires the hook without waiting for it to finish, so it can
-	// never block the agent loop (or, for beforeTool, gate the call it
-	// wraps).
+	// never block the agent loop.
 	Async bool `json:"async,omitempty"`
 }
 

@@ -18,12 +18,11 @@ func TestNewToolCallLineSetsDurationOnlyWhenExecuted(t *testing.T) {
 		want     int64
 	}{
 		{"executed", DecisionExecuted, 250},
-		{"denied_by_hook", DecisionDeniedByHook, 0},
 		{"errored", DecisionErrored, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			l := NewToolCallLine(fixedNow, "sess-1", "bash", "shell", tc.decision, "intent", "source", "reason", 250*time.Millisecond)
+			l := NewToolCallLine(fixedNow, "sess-1", "bash", "shell", tc.decision, "intent", "reason", 250*time.Millisecond)
 			if l.DurationMs != tc.want {
 				t.Errorf("DurationMs = %d, want %d", l.DurationMs, tc.want)
 			}
@@ -32,7 +31,7 @@ func TestNewToolCallLineSetsDurationOnlyWhenExecuted(t *testing.T) {
 }
 
 func TestNewToolCallLineFieldsAndJSONNames(t *testing.T) {
-	l := NewToolCallLine(fixedNow, "sess-1", "bash", "shell", DecisionExecuted, "checking disk usage", "", "", 42*time.Millisecond)
+	l := NewToolCallLine(fixedNow, "sess-1", "bash", "shell", DecisionExecuted, "checking disk usage", "", 42*time.Millisecond)
 
 	data, err := json.Marshal(l)
 	if err != nil {
@@ -57,30 +56,24 @@ func TestNewToolCallLineFieldsAndJSONNames(t *testing.T) {
 			t.Errorf("field %q = %v, want %v", k, got, want)
 		}
 	}
-	// source/reason are omitempty and both empty here.
-	if _, ok := m["source"]; ok {
-		t.Errorf("source = %v, want omitted when empty", m["source"])
-	}
+	// reason is omitempty and empty here.
 	if _, ok := m["reason"]; ok {
 		t.Errorf("reason = %v, want omitted when empty", m["reason"])
 	}
 }
 
-func TestNewToolCallLineDeniedByHookCarriesSourceAndReason(t *testing.T) {
-	l := NewToolCallLine(fixedNow, "sess-1", "bash", "shell", DecisionDeniedByHook, "rm everything", "./policy.sh", "no destructive commands", 0)
-	if l.Source != "./policy.sh" {
-		t.Errorf("Source = %q, want %q", l.Source, "./policy.sh")
-	}
-	if l.Reason != "no destructive commands" {
-		t.Errorf("Reason = %q, want %q", l.Reason, "no destructive commands")
+func TestNewToolCallLineErroredCarriesReason(t *testing.T) {
+	l := NewToolCallLine(fixedNow, "sess-1", "bash", "shell", DecisionErrored, "rm everything", "command not found", 0)
+	if l.Reason != "command not found" {
+		t.Errorf("Reason = %q, want %q", l.Reason, "command not found")
 	}
 	if l.Intent != "rm everything" {
-		t.Errorf("Intent = %q, want %q, even on a denied call", l.Intent, "rm everything")
+		t.Errorf("Intent = %q, want %q, even on an errored call", l.Intent, "rm everything")
 	}
 }
 
 func TestNewHookRunLineFieldsAndJSONNames(t *testing.T) {
-	l := NewHookRunLine(fixedNow, "sess-1", "beforeTool", "./check.sh", 1, 15*time.Millisecond, "denied")
+	l := NewHookRunLine(fixedNow, "sess-1", "afterTool", "./check.sh", 1, 15*time.Millisecond, "failed")
 
 	data, err := json.Marshal(l)
 	if err != nil {
@@ -94,11 +87,11 @@ func TestNewHookRunLineFieldsAndJSONNames(t *testing.T) {
 	wantKeys := map[string]any{
 		"ts":          "2026-01-02T03:04:05Z",
 		"session_id":  "sess-1",
-		"lifecycle":   "beforeTool",
+		"lifecycle":   "afterTool",
 		"command":     "./check.sh",
 		"exit_code":   float64(1),
 		"duration_ms": float64(15),
-		"stderr":      "denied",
+		"stderr":      "failed",
 	}
 	for k, want := range wantKeys {
 		if got := m[k]; got != want {
@@ -120,7 +113,7 @@ func TestNewHookRunLineOmitsEmptyStderr(t *testing.T) {
 
 func TestNewHookRunLineTruncatesLongStderr(t *testing.T) {
 	long := strings.Repeat("x", stderrCap+500)
-	l := NewHookRunLine(fixedNow, "sess-1", "beforeTool", "./check.sh", 1, time.Millisecond, long)
+	l := NewHookRunLine(fixedNow, "sess-1", "afterTool", "./check.sh", 1, time.Millisecond, long)
 
 	if len(l.Stderr) >= len(long) {
 		t.Fatalf("Stderr len = %d, want it truncated below the original %d bytes", len(l.Stderr), len(long))
@@ -131,7 +124,7 @@ func TestNewHookRunLineTruncatesLongStderr(t *testing.T) {
 }
 
 func TestNewHookRunLineLeavesShortStderrUntouched(t *testing.T) {
-	l := NewHookRunLine(fixedNow, "sess-1", "beforeTool", "./check.sh", 1, time.Millisecond, "short message")
+	l := NewHookRunLine(fixedNow, "sess-1", "afterTool", "./check.sh", 1, time.Millisecond, "short message")
 	if l.Stderr != "short message" {
 		t.Errorf("Stderr = %q, want it unchanged", l.Stderr)
 	}
@@ -165,7 +158,7 @@ func TestWriterWritesToolCallLineToSessionFile(t *testing.T) {
 
 	w := New()
 	w.SessionID = "sess-abc"
-	w.WriteToolCall("bash", "shell", DecisionExecuted, "list files", "", "", 10*time.Millisecond)
+	w.WriteToolCall("bash", "shell", DecisionExecuted, "list files", "", 10*time.Millisecond)
 	w.Close()
 
 	path := filepath.Join(stateHome, "liam", "traces", "sess-abc.jsonl")
@@ -184,7 +177,7 @@ func TestWriterWritesHookRunLineToSessionFile(t *testing.T) {
 
 	w := New()
 	w.SessionID = "sess-abc"
-	w.WriteHookRun("beforeTool", "./check.sh", 0, 5*time.Millisecond, "")
+	w.WriteHookRun("afterTool", "./check.sh", 0, 5*time.Millisecond, "")
 	w.Close()
 
 	path := filepath.Join(stateHome, "liam", "traces", "sess-abc.jsonl")
@@ -192,7 +185,7 @@ func TestWriterWritesHookRunLineToSessionFile(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("len(lines) = %d, want 1", len(lines))
 	}
-	if lines[0].Command != "./check.sh" || lines[0].Lifecycle != "beforeTool" {
+	if lines[0].Command != "./check.sh" || lines[0].Lifecycle != "afterTool" {
 		t.Errorf("line = %+v, want the written HookRunLine", lines[0])
 	}
 }
@@ -203,9 +196,9 @@ func TestWriterSwitchesFileOnSessionIDChange(t *testing.T) {
 
 	w := New()
 	w.SessionID = "sess-first"
-	w.WriteToolCall("bash", "shell", DecisionExecuted, "", "", "", time.Millisecond)
+	w.WriteToolCall("bash", "shell", DecisionExecuted, "", "", time.Millisecond)
 	w.SessionID = "sess-second"
-	w.WriteToolCall("read", "read", DecisionExecuted, "", "", "", time.Millisecond)
+	w.WriteToolCall("read", "read", DecisionExecuted, "", "", time.Millisecond)
 	w.Close()
 
 	traces := filepath.Join(stateHome, "liam", "traces")
@@ -226,7 +219,7 @@ func TestWriterMultipleWritesAppendInOrder(t *testing.T) {
 	w := New()
 	w.SessionID = "sess-abc"
 	for i := 0; i < 20; i++ {
-		w.WriteToolCall("bash", "shell", DecisionExecuted, "", "", "", time.Millisecond)
+		w.WriteToolCall("bash", "shell", DecisionExecuted, "", "", time.Millisecond)
 	}
 	w.Close()
 

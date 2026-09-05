@@ -317,60 +317,6 @@ func TestSubmitSlashClearFiresSessionEndThenSessionStart(t *testing.T) {
 	}
 }
 
-// TestSubmitDeniedByUserPromptSubmitHookShowsReasonAndStartsNoTurn covers
-// issue #102's userPromptSubmit lifecycle point: a denying hook must show
-// the user what they typed plus the denial reason, and start no turn at
-// all — the raw text never even reaches the /quit-/clear-/skills-/compact
-// dispatch table below it in submit().
-func TestSubmitDeniedByUserPromptSubmitHookShowsReasonAndStartsNoTurn(t *testing.T) {
-	hooks := &hook.Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: `echo "no chatting about that" >&2; exit 1`}},
-	}}
-	m := New(agent.Loop{Hooks: hooks}, config.Config{}, nil)
-	m.input.SetValue("hello there")
-
-	next, cmd := m.submit()
-	mm := next.(Model)
-
-	if cmd != nil {
-		t.Error("submit() returned a non-nil cmd, want nil (a denied prompt starts no turn)")
-	}
-	if mm.busy {
-		t.Error("busy = true, want false (a denied prompt never starts a turn)")
-	}
-	if len(mm.lines) != 2 {
-		t.Fatalf("lines = %+v, want [user text, system denial]", mm.lines)
-	}
-	if mm.lines[0].role != "user" || mm.lines[0].text != "hello there" {
-		t.Errorf("lines[0] = %+v, want the user's own typed text", mm.lines[0])
-	}
-	if mm.lines[1].role != "system" || !strings.Contains(mm.lines[1].text, "no chatting about that") {
-		t.Errorf("lines[1] = %+v, want a system line mentioning the hook's stderr", mm.lines[1])
-	}
-}
-
-// TestSubmitAllowedByUserPromptSubmitHookProceedsNormally covers the
-// complementary case: a userPromptSubmit hook that exits 0 lets the
-// submission proceed through the reserved-command dispatch table exactly as
-// if no hook were configured.
-func TestSubmitAllowedByUserPromptSubmitHookProceedsNormally(t *testing.T) {
-	hooks := &hook.Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: "exit 0"}},
-	}}
-	m := New(agent.Loop{Hooks: hooks}, config.Config{}, nil)
-	m.input.SetValue("/skills")
-
-	next, cmd := m.submit()
-	mm := next.(Model)
-
-	if cmd != nil {
-		t.Error("submit(\"/skills\") returned a non-nil cmd, want nil (no turn started)")
-	}
-	if len(mm.lines) != 1 || mm.lines[0].role != "raw" {
-		t.Fatalf("lines = %+v, want the /skills dispatch to still run normally", mm.lines)
-	}
-}
-
 func TestSubmitSlashSkillsRendersCatalogAsRawLine(t *testing.T) {
 	skills := []skill.Skill{
 		{Name: "commit-messages", Description: "Write conventional commit messages.", Scope: skill.ScopeUser},

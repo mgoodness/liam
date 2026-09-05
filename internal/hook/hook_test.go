@@ -33,179 +33,21 @@ func (c *captureWarnings) all() []string {
 	return append([]string(nil), c.msgs...)
 }
 
-func TestBeforeToolAllowsWhenNoHooksConfigured(t *testing.T) {
-	r := &Runner{}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked", d)
-	}
-}
-
-func TestBeforeToolAllowsOnZeroExit(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: "exit 0"}},
-	}}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked", d)
-	}
-}
-
-func TestBeforeToolBlocksOnNonZeroExitAndSurfacesStderr(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: `echo "no shell commands allowed" >&2; exit 1`}},
-	}}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if !d.Blocked {
-		t.Fatalf("Decision = %+v, want blocked", d)
-	}
-	if d.Reason != "no shell commands allowed" {
-		t.Errorf("Reason = %q, want %q", d.Reason, "no shell commands allowed")
-	}
-}
-
-func TestBeforeToolFallsBackToExitCodeWhenStderrEmpty(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: "exit 3"}},
-	}}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if !d.Blocked {
-		t.Fatalf("Decision = %+v, want blocked", d)
-	}
-	if !strings.Contains(d.Reason, "exit 3") {
-		t.Errorf("Reason = %q, want a mention of the exit code", d.Reason)
-	}
-}
-
-func TestBeforeToolMatchRestrictsToNamedTools(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: "exit 1", Match: []string{"edit"}}},
-	}}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (bash doesn't match [edit])", d)
-	}
-}
-
-func TestBeforeToolWildcardMatchesEveryTool(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: "exit 1", Match: []string{"*"}}},
-	}}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if !d.Blocked {
-		t.Errorf("Decision = %+v, want blocked (\"*\" matches every tool)", d)
-	}
-}
-
-func TestBeforeToolStopsAtFirstBlockingHook(t *testing.T) {
-	dir := t.TempDir()
-	secondRanPath := dir + "/second-ran"
-	r := &Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{
-			{Command: "exit 1"},
-			{Command: "touch " + secondRanPath}, // must never run
-		},
-	}}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if !d.Blocked {
-		t.Fatalf("Decision = %+v, want blocked by the first hook", d)
-	}
-	if fileExists(secondRanPath) {
-		t.Error("second hook ran after the first already blocked")
-	}
-}
-
-// TestBeforeToolAsyncHookNeverBlocks covers async: true's fire-and-forget
-// contract: an async hook can't gate the call it's attached to, even when
-// it would otherwise deny (non-zero exit).
-func TestBeforeToolAsyncHookNeverBlocks(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	r := &Runner{Hooks: config.HooksConfig{
-		BeforeTool: []config.HookConfig{{Command: "exit 1", Async: true}},
-	}}
-	r.Warn = func(string) { wg.Done() }
-
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (async hook)", d)
-	}
-
-	waitOrTimeout(t, &wg)
-}
-
-// TestBeforeToolFailsOpenOnCommandNotFound covers ADR-0002: a hook whose
-// command can't even be started fails open (allow) with a logged warning,
-// rather than blocking.
-func TestBeforeToolFailsOpenOnCommandNotFound(t *testing.T) {
-	cw := &captureWarnings{}
-	r := &Runner{
-		Hooks: config.HooksConfig{BeforeTool: []config.HookConfig{{Command: "/no/such/binary-liam-test"}}},
-		Warn:  cw.fn(),
-	}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (fail open)", d)
-	}
-	if len(cw.all()) == 0 {
-		t.Error("Warn was never called, want a fail-open warning")
-	}
-}
-
-// TestBeforeToolFailsOpenOnTimeout covers ADR-0002's other fail-open case: a
-// hook that doesn't return within TimeoutMs fails open rather than blocking.
-func TestBeforeToolFailsOpenOnTimeout(t *testing.T) {
-	cw := &captureWarnings{}
-	r := &Runner{
-		Hooks: config.HooksConfig{BeforeTool: []config.HookConfig{{Command: "sleep 5; exit 1", TimeoutMs: 50}}},
-		Warn:  cw.fn(),
-	}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (timeout fails open)", d)
-	}
-	if len(cw.all()) == 0 {
-		t.Error("Warn was never called, want a fail-open warning")
-	}
-}
-
-// TestBeforeToolFailsOpenOnSignalKill covers ADR-0002's "crashes before
-// exiting" fail-open case: a hook process killed by a signal (here, the
-// shell sending itself SIGKILL) reports ExitCode() == -1 per os/exec's
-// documented behavior, which must fail open rather than being treated as a
-// deny verdict.
-func TestBeforeToolFailsOpenOnSignalKill(t *testing.T) {
-	cw := &captureWarnings{}
-	r := &Runner{
-		Hooks: config.HooksConfig{BeforeTool: []config.HookConfig{{Command: "kill -9 $$"}}},
-		Warn:  cw.fn(),
-	}
-	d := r.BeforeTool(context.Background(), "bash", `{}`)
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (signal kill fails open)", d)
-	}
-	if len(cw.all()) == 0 {
-		t.Error("Warn was never called, want a fail-open warning")
-	}
-}
-
-// TestRunReceivesStdinJSONAndLIAMEnvVars drives a real "sh -c" hook that
-// writes its stdin JSON (line 1) and the LIAM_* env vars it saw (remaining
-// lines) to a temp file, then reads the file back to assert on both.
+// TestRunReceivesStdinJSONAndLIAMEnvVars drives a real "sh -c" hook (via
+// AfterTool) that writes its stdin JSON (line 1) and the LIAM_* env vars it
+// saw (remaining lines) to a temp file, then reads the file back to assert
+// on both.
 func TestRunReceivesStdinJSONAndLIAMEnvVars(t *testing.T) {
 	dir := t.TempDir()
 	outPath := dir + "/hook-saw.json"
 	cmd := `{ cat; echo; } > ` + outPath + `; { echo "LIFECYCLE=$LIAM_LIFECYCLE"; echo "SESSION=$LIAM_SESSION_ID"; echo "CWD=$LIAM_CWD"; echo "TOOL=$LIAM_TOOL_NAME"; echo "DISABLED=$LIAM_HOOKS_DISABLED"; } >> ` + outPath
 
 	r := &Runner{
-		Hooks:     config.HooksConfig{BeforeTool: []config.HookConfig{{Command: cmd}}},
+		Hooks:     config.HooksConfig{AfterTool: []config.HookConfig{{Command: cmd}}},
 		SessionID: "sess-123",
 		Cwd:       dir,
 	}
-	d := r.BeforeTool(context.Background(), "bash", `{"command":"ls"}`)
-	if d.Blocked {
-		t.Fatalf("Decision = %+v, want not blocked", d)
-	}
+	r.AfterTool(context.Background(), "bash", `{"command":"ls"}`, "output", false)
 
 	got := readFile(t, outPath)
 
@@ -222,8 +64,8 @@ func TestRunReceivesStdinJSONAndLIAMEnvVars(t *testing.T) {
 	if err := json.Unmarshal([]byte(firstLine), &stdin); err != nil {
 		t.Fatalf("unmarshaling captured stdin JSON %q: %v", firstLine, err)
 	}
-	if stdin.Lifecycle != "beforeTool" {
-		t.Errorf("stdin lifecycle = %q, want beforeTool", stdin.Lifecycle)
+	if stdin.Lifecycle != "afterTool" {
+		t.Errorf("stdin lifecycle = %q, want afterTool", stdin.Lifecycle)
 	}
 	if stdin.SessionID != "sess-123" {
 		t.Errorf("stdin sessionId = %q, want sess-123", stdin.SessionID)
@@ -235,8 +77,8 @@ func TestRunReceivesStdinJSONAndLIAMEnvVars(t *testing.T) {
 		t.Errorf("stdin tool.args = %s, want %s", stdin.Tool.Args, `{"command":"ls"}`)
 	}
 
-	if !strings.Contains(got, "LIFECYCLE=beforeTool") {
-		t.Errorf("captured env = %q, want LIAM_LIFECYCLE=beforeTool", got)
+	if !strings.Contains(got, "LIFECYCLE=afterTool") {
+		t.Errorf("captured env = %q, want LIAM_LIFECYCLE=afterTool", got)
 	}
 	if !strings.Contains(got, "SESSION=sess-123") {
 		t.Errorf("captured env = %q, want LIAM_SESSION_ID=sess-123", got)
@@ -246,171 +88,6 @@ func TestRunReceivesStdinJSONAndLIAMEnvVars(t *testing.T) {
 	}
 	if !strings.Contains(got, "DISABLED=1") {
 		t.Errorf("captured env = %q, want LIAM_HOOKS_DISABLED=1", got)
-	}
-}
-
-func TestUserPromptSubmitAllowsWhenNoHooksConfigured(t *testing.T) {
-	r := &Runner{}
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked", d)
-	}
-}
-
-func TestUserPromptSubmitAllowsOnZeroExit(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: "exit 0"}},
-	}}
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked", d)
-	}
-}
-
-func TestUserPromptSubmitBlocksOnNonZeroExitAndSurfacesStderr(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: `echo "no prompts about foo" >&2; exit 1`}},
-	}}
-	d := r.UserPromptSubmit(context.Background(), "tell me about foo")
-	if !d.Blocked {
-		t.Fatalf("Decision = %+v, want blocked", d)
-	}
-	if d.Reason != "no prompts about foo" {
-		t.Errorf("Reason = %q, want %q", d.Reason, "no prompts about foo")
-	}
-}
-
-func TestUserPromptSubmitFallsBackToExitCodeWhenStderrEmpty(t *testing.T) {
-	r := &Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: "exit 3"}},
-	}}
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if !d.Blocked {
-		t.Fatalf("Decision = %+v, want blocked", d)
-	}
-	if !strings.Contains(d.Reason, "exit 3") {
-		t.Errorf("Reason = %q, want a mention of the exit code", d.Reason)
-	}
-}
-
-func TestUserPromptSubmitStopsAtFirstBlockingHook(t *testing.T) {
-	dir := t.TempDir()
-	secondRanPath := dir + "/second-ran"
-	r := &Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{
-			{Command: "exit 1"},
-			{Command: "touch " + secondRanPath}, // must never run
-		},
-	}}
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if !d.Blocked {
-		t.Fatalf("Decision = %+v, want blocked by the first hook", d)
-	}
-	if fileExists(secondRanPath) {
-		t.Error("second hook ran after the first already blocked")
-	}
-}
-
-// TestUserPromptSubmitAsyncHookNeverBlocks covers async: true's
-// fire-and-forget contract: an async hook can't gate the submission it's
-// attached to, even when it would otherwise deny (non-zero exit).
-func TestUserPromptSubmitAsyncHookNeverBlocks(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	r := &Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: "exit 1", Async: true}},
-	}}
-	r.Warn = func(string) { wg.Done() }
-
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (async hook)", d)
-	}
-
-	waitOrTimeout(t, &wg)
-}
-
-// TestUserPromptSubmitFailsOpenOnCommandNotFound covers ADR-0002: a hook
-// whose command can't even be started fails open (allow) with a logged
-// warning, rather than blocking the prompt.
-func TestUserPromptSubmitFailsOpenOnCommandNotFound(t *testing.T) {
-	cw := &captureWarnings{}
-	r := &Runner{
-		Hooks: config.HooksConfig{UserPromptSubmit: []config.HookConfig{{Command: "/no/such/binary-liam-test"}}},
-		Warn:  cw.fn(),
-	}
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (fail open)", d)
-	}
-	if len(cw.all()) == 0 {
-		t.Error("Warn was never called, want a fail-open warning")
-	}
-}
-
-// TestUserPromptSubmitFailsOpenOnTimeout covers ADR-0002's other fail-open
-// case: a hook that doesn't return within TimeoutMs fails open rather than
-// blocking the prompt.
-func TestUserPromptSubmitFailsOpenOnTimeout(t *testing.T) {
-	cw := &captureWarnings{}
-	r := &Runner{
-		Hooks: config.HooksConfig{UserPromptSubmit: []config.HookConfig{{Command: "sleep 5; exit 1", TimeoutMs: 50}}},
-		Warn:  cw.fn(),
-	}
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (timeout fails open)", d)
-	}
-	if len(cw.all()) == 0 {
-		t.Error("Warn was never called, want a fail-open warning")
-	}
-}
-
-// TestUserPromptSubmitFailsOpenOnSignalKill covers ADR-0002's "crashes
-// before exiting" fail-open case for the new blocking lifecycle point, same
-// as TestBeforeToolFailsOpenOnSignalKill.
-func TestUserPromptSubmitFailsOpenOnSignalKill(t *testing.T) {
-	cw := &captureWarnings{}
-	r := &Runner{
-		Hooks: config.HooksConfig{UserPromptSubmit: []config.HookConfig{{Command: "kill -9 $$"}}},
-		Warn:  cw.fn(),
-	}
-	d := r.UserPromptSubmit(context.Background(), "hello")
-	if d.Blocked {
-		t.Errorf("Decision = %+v, want not blocked (signal kill fails open)", d)
-	}
-	if len(cw.all()) == 0 {
-		t.Error("Warn was never called, want a fail-open warning")
-	}
-}
-
-// TestUserPromptSubmitReceivesRawText asserts the hook's stdin JSON carries
-// the exact text passed in, under "prompt.text".
-func TestUserPromptSubmitReceivesRawText(t *testing.T) {
-	dir := t.TempDir()
-	outPath := dir + "/prompt-saw.json"
-	r := &Runner{Hooks: config.HooksConfig{
-		UserPromptSubmit: []config.HookConfig{{Command: "cat > " + outPath}},
-	}}
-	d := r.UserPromptSubmit(context.Background(), "/foo bar baz")
-	if d.Blocked {
-		t.Fatalf("Decision = %+v, want not blocked", d)
-	}
-
-	var stdin struct {
-		Lifecycle string `json:"lifecycle"`
-		Prompt    struct {
-			Text string `json:"text"`
-		} `json:"prompt"`
-	}
-	if err := json.Unmarshal([]byte(readFile(t, outPath)), &stdin); err != nil {
-		t.Fatalf("unmarshaling captured stdin: %v", err)
-	}
-	if stdin.Lifecycle != "userPromptSubmit" {
-		t.Errorf("stdin lifecycle = %q, want userPromptSubmit", stdin.Lifecycle)
-	}
-	if stdin.Prompt.Text != "/foo bar baz" {
-		t.Errorf("stdin.prompt.text = %q, want %q", stdin.Prompt.Text, "/foo bar baz")
 	}
 }
 
@@ -471,6 +148,65 @@ func TestAfterToolReceivesResult(t *testing.T) {
 	}
 }
 
+// TestAfterToolMatchRestrictsToNamedTools covers AfterTool's Match filter —
+// the one remaining lifecycle point where Match still means something now
+// that beforeTool is gone.
+func TestAfterToolMatchRestrictsToNamedTools(t *testing.T) {
+	dir := t.TempDir()
+	ranPath := dir + "/ran"
+	r := &Runner{Hooks: config.HooksConfig{
+		AfterTool: []config.HookConfig{{Command: "touch " + ranPath, Match: []string{"edit"}}},
+	}}
+	r.AfterTool(context.Background(), "bash", `{}`, "output", false)
+	if fileExists(ranPath) {
+		t.Error("afterTool hook ran for \"bash\", want it restricted to [edit]")
+	}
+}
+
+// TestAfterToolFailsOpenOnTimeout covers ADR-0002's fail-open contract for
+// the one remaining lifecycle point with a timeout-prone real use case
+// (afterTool is the most likely to run a slow external command).
+func TestAfterToolFailsOpenOnTimeout(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{AfterTool: []config.HookConfig{{Command: "sleep 5; exit 1", TimeoutMs: 50}}},
+		Warn:  cw.fn(),
+	}
+	r.AfterTool(context.Background(), "bash", `{}`, "output", false)
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
+// TestAfterToolFailsOpenOnCommandNotFound covers ADR-0002's other fail-open
+// case for afterTool, matching AgentDone's equivalent coverage.
+func TestAfterToolFailsOpenOnCommandNotFound(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{AfterTool: []config.HookConfig{{Command: "/no/such/binary-liam-test"}}},
+		Warn:  cw.fn(),
+	}
+	r.AfterTool(context.Background(), "bash", `{}`, "output", false)
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
+// TestAfterToolFailsOpenOnSignalKill covers ADR-0002's "crashes before
+// exiting" fail-open case for afterTool, matching AgentDone's equivalent
+// coverage.
+func TestAfterToolFailsOpenOnSignalKill(t *testing.T) {
+	cw := &captureWarnings{}
+	r := &Runner{
+		Hooks: config.HooksConfig{AfterTool: []config.HookConfig{{Command: "kill -9 $$"}}},
+		Warn:  cw.fn(),
+	}
+	r.AfterTool(context.Background(), "bash", `{}`, "output", false)
+	if len(cw.all()) == 0 {
+		t.Error("Warn was never called, want a fail-open warning")
+	}
+}
+
 func TestAgentDoneNeverBlocksOnNonZeroExit(t *testing.T) {
 	cw := &captureWarnings{}
 	r := &Runner{
@@ -520,8 +256,8 @@ func TestAgentDoneReceivesPayload(t *testing.T) {
 	}
 }
 
-// TestAgentDoneFailsOpenOnCommandNotFound covers ADR-0002 for the new
-// observer lifecycle point, same fail-open contract as the existing 4.
+// TestAgentDoneFailsOpenOnCommandNotFound covers ADR-0002 for an observer
+// lifecycle point.
 func TestAgentDoneFailsOpenOnCommandNotFound(t *testing.T) {
 	cw := &captureWarnings{}
 	r := &Runner{
@@ -535,7 +271,7 @@ func TestAgentDoneFailsOpenOnCommandNotFound(t *testing.T) {
 }
 
 // TestAgentDoneFailsOpenOnTimeout covers ADR-0002's timeout fail-open case
-// for the new observer lifecycle point.
+// for an observer lifecycle point.
 func TestAgentDoneFailsOpenOnTimeout(t *testing.T) {
 	cw := &captureWarnings{}
 	r := &Runner{
@@ -549,7 +285,7 @@ func TestAgentDoneFailsOpenOnTimeout(t *testing.T) {
 }
 
 // TestAgentDoneFailsOpenOnSignalKill covers ADR-0002's "crashes before
-// exiting" fail-open case for the new observer lifecycle point.
+// exiting" fail-open case for an observer lifecycle point.
 func TestAgentDoneFailsOpenOnSignalKill(t *testing.T) {
 	cw := &captureWarnings{}
 	r := &Runner{
@@ -560,6 +296,22 @@ func TestAgentDoneFailsOpenOnSignalKill(t *testing.T) {
 	if len(cw.all()) == 0 {
 		t.Error("Warn was never called, want a fail-open warning")
 	}
+}
+
+// TestAsyncHookNeverBlocksCaller covers async: true's fire-and-forget
+// contract in general: an async hook runs in the background rather than
+// blocking its dispatching call, regardless of lifecycle point.
+func TestAsyncHookNeverBlocksCaller(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	r := &Runner{Hooks: config.HooksConfig{
+		AfterTool: []config.HookConfig{{Command: "exit 1", Async: true}},
+	}}
+	r.Warn = func(string) { wg.Done() }
+
+	r.AfterTool(context.Background(), "bash", `{}`, "output", false)
+
+	waitOrTimeout(t, &wg)
 }
 
 func waitOrTimeout(t *testing.T, wg *sync.WaitGroup) {

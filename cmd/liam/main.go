@@ -343,14 +343,6 @@ func runHeadless(loop agent.Loop, mcpLoader mcp.ToolLoader, cfg config.Config, p
 		loop.Hooks.SessionID = sessID
 		loop.Hooks.SessionStart(ctx)
 		defer loop.Hooks.SessionEnd(ctx)
-
-		// The raw -p flag value, unmodified — headless mode has no
-		// slash-command/@-mention/skill expansion of its own to fire ahead
-		// of, unlike the TUI's submit().
-		if d := loop.Hooks.UserPromptSubmit(ctx, prompt); d.Blocked {
-			fmt.Fprintf(stderr, "Liam: prompt blocked by hook: %s\n", d.Reason)
-			return 1
-		}
 	}
 
 	var wroteText bool

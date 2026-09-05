@@ -1,13 +1,12 @@
-// Package hook dispatches liam's 6 hook lifecycle points — sessionStart,
-// sessionEnd, userPromptSubmit, beforeTool, afterTool, agentDone — against a
-// config.HooksConfig, running each matching hook's command as a child
-// process. Two lifecycle points can gate something: a blocking (non-async)
-// beforeTool hook can deny the tool call it wraps, with the hook's stderr
-// surfaced to the model as the reason, and a blocking (non-async)
-// userPromptSubmit hook can deny the user's message from ever reaching the
-// model, with the hook's stderr surfaced to the user instead (there's no
-// model turn to surface it to). Every other lifecycle point is a pure
-// observer (see ADR-0002 for the fail-open rules governing everything else).
+// Package hook dispatches liam's 4 hook lifecycle points — sessionStart,
+// sessionEnd, afterTool, agentDone — against a config.HooksConfig, running
+// each matching hook's command as a child process. Every lifecycle point is
+// a pure observer: none can gate or deny anything, only log a failure via
+// Warn (see ADR-0002 for the fail-open rules governing hook-process
+// failures specifically). liam previously shipped a blocking beforeTool/
+// userPromptSubmit contract (issues #84, #102); both were removed after
+// shipping with zero real configured usage — see ADR-0004's note on tool-
+// call gating.
 package hook
 
 import (
@@ -24,16 +23,14 @@ import (
 	"github.com/mgoodness/liam/internal/trace"
 )
 
-// Lifecycle identifies one of the 6 hook lifecycle points.
+// Lifecycle identifies one of the 4 hook lifecycle points.
 type Lifecycle string
 
 const (
-	SessionStart     Lifecycle = "sessionStart"
-	SessionEnd       Lifecycle = "sessionEnd"
-	UserPromptSubmit Lifecycle = "userPromptSubmit"
-	BeforeTool       Lifecycle = "beforeTool"
-	AfterTool        Lifecycle = "afterTool"
-	AgentDone        Lifecycle = "agentDone"
+	SessionStart Lifecycle = "sessionStart"
+	SessionEnd   Lifecycle = "sessionEnd"
+	AfterTool    Lifecycle = "afterTool"
+	AgentDone    Lifecycle = "agentDone"
 )
 
 // Runner dispatches hooks configured under one HooksConfig for a single
@@ -51,23 +48,9 @@ type Runner struct {
 	// Trace, when non-nil, records issue #63's per-run audit line for every
 	// hook this Runner runs (see run) — separate from, and regardless of,
 	// any tool-call outcome line the caller (internal/agent's Loop.dispatch)
-	// records for the call a beforeTool hook gates. nil disables tracing
-	// (e.g. in tests that don't construct one), never the hooks themselves.
+	// records for the same call. nil disables tracing (e.g. in tests that
+	// don't construct one), never the hooks themselves.
 	Trace *trace.Writer
-}
-
-// Decision is BeforeTool's verdict: whether a blocking hook denied the call,
-// and why.
-type Decision struct {
-	Blocked bool
-	// Reason is the denying hook's stderr (or a fallback describing the
-	// exit code, if stderr was empty), surfaced to the model as the tool
-	// result.
-	Reason string
-	// Source is the denying hook's Command, threaded through to Trace's
-	// per-tool-call "source" field by the caller. Empty when Blocked is
-	// false.
-	Source string
 }
 
 // SessionStart runs every configured sessionStart hook.
@@ -78,59 +61,6 @@ func (r *Runner) SessionStart(ctx context.Context) {
 // SessionEnd runs every configured sessionEnd hook.
 func (r *Runner) SessionEnd(ctx context.Context) {
 	r.dispatch(ctx, SessionEnd, r.Hooks.SessionEnd, extras{})
-}
-
-// UserPromptSubmit runs every configured userPromptSubmit hook — the same
-// blocking contract as BeforeTool (see blockingDispatch), except the denial
-// keeps text from ever reaching the model at all rather than gating a tool
-// call. Match is ignored: there's no tool name to match against, same as
-// sessionStart/sessionEnd.
-func (r *Runner) UserPromptSubmit(ctx context.Context, text string) Decision {
-	ex := extras{Prompt: &promptInfo{Text: text}}
-	return r.blockingDispatch(ctx, UserPromptSubmit, r.Hooks.UserPromptSubmit, ex, nil)
-}
-
-// BeforeTool runs every configured beforeTool hook matching name — see
-// blockingDispatch for the shared blocking/async/fail-open contract.
-func (r *Runner) BeforeTool(ctx context.Context, name, argsJSON string) Decision {
-	ex := extras{Tool: &toolInfo{Name: name, Args: rawArgs(argsJSON)}}
-	return r.blockingDispatch(ctx, BeforeTool, r.Hooks.BeforeTool, ex, func(hc config.HookConfig) bool {
-		return matches(hc.Match, name)
-	})
-}
-
-// blockingDispatch runs hooks in declaration order, stopping at the first
-// blocking (non-async) hook that exits non-zero after actually running —
-// the shared shape behind BeforeTool and UserPromptSubmit's identical
-// blocking contract. An async hook is fired and never gates the call/
-// submission, matching AfterTool's own fire-and-forget precedent. match,
-// when non-nil, additionally filters which hooks run (BeforeTool's
-// tool-name matching); nil (UserPromptSubmit's case, since there's no tool
-// name to match against) runs every hook.
-func (r *Runner) blockingDispatch(ctx context.Context, lc Lifecycle, hooks []config.HookConfig, ex extras, match func(config.HookConfig) bool) Decision {
-	for _, hc := range hooks {
-		if match != nil && !match(hc) {
-			continue
-		}
-		if hc.Async {
-			go r.runAndWarn(context.Background(), hc, lc, ex)
-			continue
-		}
-
-		oc := r.run(ctx, hc, lc, ex)
-		if oc.err != nil {
-			r.warnFailOpen(hc, lc, oc.err)
-			continue
-		}
-		if oc.exitCode != 0 {
-			reason := strings.TrimSpace(oc.stderr)
-			if reason == "" {
-				reason = fmt.Sprintf("blocked by hook %q (exit %d)", hc.Command, oc.exitCode)
-			}
-			return Decision{Blocked: true, Reason: reason, Source: hc.Command}
-		}
-	}
-	return Decision{}
 }
 
 // AfterTool runs every configured afterTool hook matching name. It never
@@ -156,7 +86,7 @@ func (r *Runner) AgentDone(ctx context.Context, finishReason, modelUsed string, 
 
 // extras bundles the lifecycle-point-specific fields of a hook's stdin JSON
 // payload, so dispatch/runAndWarn/run take a single value instead of a
-// four-pointer parameter list that would otherwise be nil at nearly every
+// three-pointer parameter list that would otherwise be nil at nearly every
 // call site: every lifecycle point but AfterTool (which sets both Tool and
 // Result) sets at most one field, the rest left nil. json.Marshal flattens
 // its fields inline into run's payload struct via Go's anonymous-field
@@ -164,13 +94,12 @@ func (r *Runner) AgentDone(ctx context.Context, finishReason, modelUsed string, 
 type extras struct {
 	Tool   *toolInfo   `json:"tool,omitempty"`
 	Result *resultInfo `json:"result,omitempty"`
-	Prompt *promptInfo `json:"prompt,omitempty"`
 	Done   *doneInfo   `json:"done,omitempty"`
 }
 
 // dispatch runs every hook in hooks matching ex.Tool (ex.Tool == nil, as
-// with sessionStart/sessionEnd/userPromptSubmit/agentDone, always matches),
-// respecting each hook's Async flag. None of these lifecycle points can gate
+// with sessionStart/sessionEnd/agentDone, always matches), respecting each
+// hook's Async flag. No lifecycle point dispatched this way can gate
 // anything — failures only reach Warn.
 func (r *Runner) dispatch(ctx context.Context, lc Lifecycle, hooks []config.HookConfig, ex extras) {
 	for _, hc := range hooks {
@@ -210,7 +139,7 @@ func (r *Runner) warn(msg string) {
 
 // outcome is one hook process's result. err is set only for a fail-open
 // condition (ADR-0002: the command couldn't be started, or it timed out) —
-// never for a plain non-zero exit, which is a normal, gate-eligible return
+// never for a plain non-zero exit, which is a normal (if failing) return
 // captured in exitCode/stderr instead.
 type outcome struct {
 	exitCode int
@@ -221,8 +150,8 @@ type outcome struct {
 
 // run executes hc's command as a child process, feeding it lc's stdin JSON
 // payload and parallel LIAM_* environment variables. Every call — success,
-// denial, or fail-open condition alike — records issue #63's HookRunLine via
-// r.Trace, via the deferred closure below: `return outcome{...}` still
+// failure, or fail-open condition alike — records issue #63's HookRunLine
+// via r.Trace, via the deferred closure below: `return outcome{...}` still
 // assigns the named oc result before the deferred func runs, so every one of
 // run's early-return branches is covered without repeating the trace call at
 // each one.
@@ -296,14 +225,6 @@ type toolInfo struct {
 type resultInfo struct {
 	Content string `json:"content"`
 	IsError bool   `json:"isError"`
-}
-
-// promptInfo is the "prompt" field of a userPromptSubmit hook's stdin JSON
-// payload: the raw text the user typed, before any of liam's own
-// pre-processing (slash-command handling, @-mention expansion, skill
-// expansion).
-type promptInfo struct {
-	Text string `json:"text"`
 }
 
 // doneInfo is the "done" field of an agentDone hook's stdin JSON payload,

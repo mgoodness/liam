@@ -3,7 +3,7 @@ package config
 import "testing"
 
 // TestLoadParsesHooksConfig covers issue #45's config surface: the hooks
-// section's 6 lifecycle-point arrays, each entry's command/match/timeoutMs/
+// section's 4 lifecycle-point arrays, each entry's command/match/timeoutMs/
 // async fields, loaded the same way Load loads everything else.
 func TestLoadParsesHooksConfig(t *testing.T) {
 	setupXDG(t)
@@ -11,9 +11,7 @@ func TestLoadParsesHooksConfig(t *testing.T) {
 	writeFile(t, cwd+"/liam.jsonc", `{
   "hooks": {
     "sessionStart": [{ "command": "echo starting" }],
-    "userPromptSubmit": [{ "command": "./gate.sh", "timeoutMs": 2000 }],
-    "beforeTool": [{ "match": ["bash", "edit"], "command": "./check.sh", "timeoutMs": 5000 }],
-    "afterTool": [{ "match": ["*"], "command": "./log.sh", "async": true }],
+    "afterTool": [{ "match": ["*"], "command": "./log.sh", "timeoutMs": 5000, "async": true }],
     "agentDone": [{ "command": "./record.sh", "async": true }]
   }
 }`)
@@ -27,35 +25,16 @@ func TestLoadParsesHooksConfig(t *testing.T) {
 		t.Errorf("Hooks.SessionStart = %+v, want one hook running %q", cfg.Hooks.SessionStart, "echo starting")
 	}
 
-	if len(cfg.Hooks.BeforeTool) != 1 {
-		t.Fatalf("Hooks.BeforeTool = %+v, want 1 entry", cfg.Hooks.BeforeTool)
-	}
-	bt := cfg.Hooks.BeforeTool[0]
-	if bt.Command != "./check.sh" || bt.TimeoutMs != 5000 || bt.Async {
-		t.Errorf("Hooks.BeforeTool[0] = %+v, want command=./check.sh timeoutMs=5000 async=false", bt)
-	}
-	if len(bt.Match) != 2 || bt.Match[0] != "bash" || bt.Match[1] != "edit" {
-		t.Errorf("Hooks.BeforeTool[0].Match = %+v, want [bash edit]", bt.Match)
-	}
-
 	if len(cfg.Hooks.AfterTool) != 1 {
 		t.Fatalf("Hooks.AfterTool = %+v, want 1 entry", cfg.Hooks.AfterTool)
 	}
 	at := cfg.Hooks.AfterTool[0]
-	if at.Command != "./log.sh" || !at.Async || len(at.Match) != 1 || at.Match[0] != "*" {
-		t.Errorf("Hooks.AfterTool[0] = %+v, want command=./log.sh async=true match=[*]", at)
+	if at.Command != "./log.sh" || at.TimeoutMs != 5000 || !at.Async || len(at.Match) != 1 || at.Match[0] != "*" {
+		t.Errorf("Hooks.AfterTool[0] = %+v, want command=./log.sh timeoutMs=5000 async=true match=[*]", at)
 	}
 
 	if len(cfg.Hooks.SessionEnd) != 0 {
 		t.Errorf("Hooks.SessionEnd = %+v, want none configured", cfg.Hooks.SessionEnd)
-	}
-
-	if len(cfg.Hooks.UserPromptSubmit) != 1 {
-		t.Fatalf("Hooks.UserPromptSubmit = %+v, want 1 entry", cfg.Hooks.UserPromptSubmit)
-	}
-	ups := cfg.Hooks.UserPromptSubmit[0]
-	if ups.Command != "./gate.sh" || ups.TimeoutMs != 2000 || ups.Async {
-		t.Errorf("Hooks.UserPromptSubmit[0] = %+v, want command=./gate.sh timeoutMs=2000 async=false", ups)
 	}
 
 	if len(cfg.Hooks.AgentDone) != 1 {

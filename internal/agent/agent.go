@@ -49,13 +49,12 @@ const autoCompactThreshold = 0.85
 type Loop struct {
 	Provider provider.Provider
 	Tools    tool.Registry
-	// Hooks, when non-nil, gates and observes every tool call via its
-	// BeforeTool/AfterTool lifecycle points (see hook.Runner) and observes
-	// each whole Run invocation's conclusion via AgentDone (see agentDone).
-	// userPromptSubmit is not dispatched from here at all — it fires from
-	// Run's own callers (cmd/liam/main.go, internal/tui/tui.go), ahead of
-	// their own pre-processing, before Run is ever invoked for a given
-	// submission. nil means no hooks are configured.
+	// Hooks, when non-nil, observes every tool call via its AfterTool
+	// lifecycle point (see hook.Runner) and each whole Run invocation's
+	// conclusion via AgentDone (see agentDone). Every hook lifecycle point
+	// is a pure observer — none can gate or deny a tool call or anything
+	// else (see ADR-0004: liam has no tool-call gating mechanism of any
+	// kind). nil means no hooks are configured.
 	Hooks *hook.Runner
 	// Trace, when non-nil, records issue #63's per-call audit line for
 	// every tool call dispatch makes (see dispatch/traceToolCall). nil
@@ -192,34 +191,27 @@ func (l Loop) Run(ctx context.Context, req provider.Request, onEvent func(provid
 // dispatch runs the Tool named by call against l.Tools, reporting an error
 // Result for an unknown tool name or malformed argument JSON rather than
 // failing the loop — the model sees the failure and decides how to proceed.
-// When l.Hooks is set, a blocking beforeTool hook can deny the call before
-// the Tool ever runs (its stderr becomes the error Result the model sees),
-// and afterTool hooks observe every call that does run. Every outcome —
-// unknown tool, denied, invalid args, errored, or a clean run — records
-// issue #63's ToolCallLine via l.Trace (see traceToolCall).
+// When l.Hooks is set, afterTool hooks observe every call that runs, purely
+// as an observer — nothing can deny a call before it runs (ADR-0004: liam
+// has no tool-call gating mechanism). Every outcome — unknown tool, invalid
+// args, errored, or a clean run — records issue #63's ToolCallLine via
+// l.Trace (see traceToolCall).
 func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result {
 	intent := extractIntent(call.ArgsJSON)
 
 	t, ok := l.Tools[call.Name]
 	if !ok {
 		reason := fmt.Sprintf("unknown tool %q", call.Name)
-		l.traceToolCall(call.Name, "", trace.DecisionErrored, intent, "", reason, 0)
+		l.traceToolCall(call.Name, "", trace.DecisionErrored, intent, reason, 0)
 		return tool.Result{Content: reason, IsError: true}
 	}
 	sideEffect := string(t.Safety().SideEffect)
-
-	if l.Hooks != nil {
-		if d := l.Hooks.BeforeTool(ctx, call.Name, call.ArgsJSON); d.Blocked {
-			l.traceToolCall(call.Name, sideEffect, trace.DecisionDeniedByHook, intent, d.Source, d.Reason, 0)
-			return tool.Result{Content: d.Reason, IsError: true}
-		}
-	}
 
 	var args map[string]any
 	if call.ArgsJSON != "" {
 		if err := json.Unmarshal([]byte(call.ArgsJSON), &args); err != nil {
 			reason := fmt.Sprintf("invalid arguments for %s: %v", call.Name, err)
-			l.traceToolCall(call.Name, sideEffect, trace.DecisionErrored, intent, "", reason, 0)
+			l.traceToolCall(call.Name, sideEffect, trace.DecisionErrored, intent, reason, 0)
 			return tool.Result{Content: reason, IsError: true}
 		}
 	}
@@ -240,7 +232,7 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 	if result.IsError {
 		decision, reason = trace.DecisionErrored, result.Content
 	}
-	l.traceToolCall(call.Name, sideEffect, decision, intent, "", reason, duration)
+	l.traceToolCall(call.Name, sideEffect, decision, intent, reason, duration)
 
 	return result
 }
@@ -248,11 +240,11 @@ func (l Loop) dispatch(ctx context.Context, call provider.ToolCall) tool.Result 
 // traceToolCall records one ToolCallLine via l.Trace, a no-op when l.Trace
 // is nil (every real call site — cmd/liam/main.go — always sets it; nil
 // only covers tests that build a Loop directly without one).
-func (l Loop) traceToolCall(name, sideEffect string, decision trace.Decision, intent, source, reason string, duration time.Duration) {
+func (l Loop) traceToolCall(name, sideEffect string, decision trace.Decision, intent, reason string, duration time.Duration) {
 	if l.Trace == nil {
 		return
 	}
-	l.Trace.WriteToolCall(name, sideEffect, decision, intent, source, reason, duration)
+	l.Trace.WriteToolCall(name, sideEffect, decision, intent, reason, duration)
 }
 
 // streamTurn drives one or more Provider.Stream attempts for a single turn,
